@@ -267,6 +267,8 @@ namespace GHelper
             isPlugged = SystemInformation.PowerStatus.PowerLineStatus;
             Logger.WriteLine("AutoSetting for " + isPlugged.ToString());
 
+            int rememberedGpuMode = AppConfig.Get("gpu_mode");
+
             BatteryControl.AutoBattery(init);
             if (init) InputDispatcher.InitScreenpad();
             DynamicLightingHelper.Init();
@@ -296,6 +298,8 @@ namespace GHelper
                 gpuControl.InitGPUMode();
                 ScreenControl.AutoScreen();
             }
+
+            gpuControl.RestoreRememberedModeAfterShutdownFix(rememberedGpuMode);
 
             ScreenControl.InitMiniled();
             VisualControl.InitBrightness();

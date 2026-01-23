@@ -14,6 +14,8 @@ namespace GHelper.Gpu
         public static int gpuMode;
         public static bool? gpuExists = null;
 
+        private bool shutdownFixRestoreDone;
+
 
         public GPUModeControl(SettingsForm settingsForm)
         {
@@ -60,6 +62,31 @@ namespace GHelper.Gpu
 
             Aura.CustomRGB.ApplyGPUColor(gpuMode);
 
+        }
+
+
+        public void RestoreRememberedModeAfterShutdownFix(int rememberedGpuMode)
+        {
+            if (shutdownFixRestoreDone) return;
+            shutdownFixRestoreDone = true;
+
+            if (!AppConfig.IsGPUFix()) return;
+            if (AppConfig.Is("gpu_auto")) return;
+            if (AppConfig.IsForceSetGPUMode()) return;
+            if (rememberedGpuMode != AsusACPI.GPUModeEco) return;
+            if (AppConfig.IsAlwaysUltimate()) return;
+            if (AppConfig.NoGpu()) return;
+
+            int mux = Program.acpi.DeviceGet(AsusACPI.GPUMux);
+            if (mux == 0) return;
+
+            int eco = Program.acpi.DeviceGet(AsusACPI.GPUEco);
+            if (eco != 0) return;
+
+            if (Program.acpi.IsXGConnected()) return;
+
+            Logger.WriteLine("Restoring GPU mode after shutdown fix: Eco");
+            SetGPUEco(1);
         }
 
 
