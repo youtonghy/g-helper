@@ -51,6 +51,9 @@ namespace GHelper
         bool sliderGammaIgnore = false;
         bool activateCheck = false;
 
+        RButton buttonAway = new RButton();
+        RButton buttonHome = new RButton();
+
         public SettingsForm()
         {
 
@@ -72,6 +75,8 @@ namespace GHelper
             buttonStandard.Text = Properties.Strings.StandardMode;
             buttonOptimized.Text = Properties.Strings.Optimized;
             buttonStopGPU.Text = Properties.Strings.StopGPUApps;
+            buttonAway.Text = GetLocalized("AwayMode", "Away");
+            buttonHome.Text = GetLocalized("HomeMode", "Home");
 
             buttonScreenAuto.Text = Properties.Strings.AutoMode;
             buttonMiniled.Text = Properties.Strings.Multizone;
@@ -114,6 +119,8 @@ namespace GHelper
             buttonStandard.AccessibleName = Properties.Strings.StandardMode;
             buttonOptimized.AccessibleName = Properties.Strings.Optimized;
             buttonUltimate.AccessibleName = Properties.Strings.UltimateMode;
+            buttonAway.AccessibleName = buttonAway.Text;
+            buttonHome.AccessibleName = buttonHome.Text;
             panelScreen.AccessibleName = Properties.Strings.LaptopScreen;
 
             buttonScreenAuto.AccessibleName = Properties.Strings.AutoMode;
@@ -138,6 +145,8 @@ namespace GHelper
             buttonStandard.BorderColor = colorStandard;
             buttonUltimate.BorderColor = colorTurbo;
             buttonOptimized.BorderColor = colorEco;
+            buttonAway.BorderColor = colorEco;
+            buttonHome.BorderColor = colorTurbo;
             buttonXGM.BorderColor = colorTurbo;
 
             button60Hz.BorderColor = colorGray;
@@ -158,6 +167,8 @@ namespace GHelper
             buttonUltimate.Click += ButtonUltimate_Click;
             buttonOptimized.Click += ButtonOptimized_Click;
             buttonStopGPU.Click += ButtonStopGPU_Click;
+            buttonAway.Click += ButtonAway_Click;
+            buttonHome.Click += ButtonHome_Click;
 
             VisibleChanged += SettingsForm_VisibleChanged;
 
@@ -210,6 +221,11 @@ namespace GHelper
             buttonUltimate.MouseMove += ButtonUltimate_MouseHover;
             buttonUltimate.MouseLeave += ButtonGPU_MouseLeave;
 
+            buttonAway.MouseMove += ButtonAway_MouseHover;
+            buttonAway.MouseLeave += ButtonGPU_MouseLeave;
+            buttonHome.MouseMove += ButtonHome_MouseHover;
+            buttonHome.MouseLeave += ButtonGPU_MouseLeave;
+
             tableGPU.MouseMove += ButtonXGM_MouseMove;
             tableGPU.MouseLeave += ButtonGPU_MouseLeave;
 
@@ -259,6 +275,8 @@ namespace GHelper
             buttonFPS.Click += ButtonFPS_Click;
             buttonOverlay.Click += ButtonOverlay_Click;
 
+            InitPendingGpuButtons();
+
             buttonAutoTDP.Click += ButtonAutoTDP_Click;
             buttonAutoTDP.BorderColor = colorTurbo;
 
@@ -289,6 +307,73 @@ namespace GHelper
 
             panelPerformance.Focus();
             InitVisual();
+        }
+
+        private static string GetLocalized(string key, string fallback)
+        {
+            return Properties.Strings.ResourceManager.GetString(key, Properties.Strings.Culture) ?? fallback;
+        }
+
+        private void InitPendingGpuButtons()
+        {
+            buttonAway.Name = "buttonAway";
+            buttonAway.Activated = false;
+            buttonAway.BackColor = SystemColors.ControlLightLight;
+            buttonAway.BorderRadius = 5;
+            buttonAway.CausesValidation = false;
+            buttonAway.Dock = DockStyle.Top;
+            buttonAway.FlatAppearance.BorderSize = 0;
+            buttonAway.FlatStyle = FlatStyle.Flat;
+            buttonAway.ForeColor = SystemColors.ControlText;
+            buttonAway.Image = Properties.Resources.icons8_leaf_48;
+            buttonAway.ImageAlign = ContentAlignment.BottomCenter;
+            buttonAway.Margin = new Padding(4);
+            buttonAway.Secondary = false;
+            buttonAway.Size = new Size(188, 120);
+            buttonAway.TabIndex = 9;
+            buttonAway.TextImageRelation = TextImageRelation.ImageAboveText;
+            buttonAway.UseVisualStyleBackColor = false;
+
+            buttonHome.Name = "buttonHome";
+            buttonHome.Activated = false;
+            buttonHome.BackColor = SystemColors.ControlLightLight;
+            buttonHome.BorderRadius = 5;
+            buttonHome.CausesValidation = false;
+            buttonHome.Dock = DockStyle.Top;
+            buttonHome.FlatAppearance.BorderSize = 0;
+            buttonHome.FlatStyle = FlatStyle.Flat;
+            buttonHome.ForeColor = SystemColors.ControlText;
+            buttonHome.Image = Properties.Resources.icons8_rocket_48;
+            buttonHome.ImageAlign = ContentAlignment.BottomCenter;
+            buttonHome.Margin = new Padding(4);
+            buttonHome.Secondary = false;
+            buttonHome.Size = new Size(188, 120);
+            buttonHome.TabIndex = 10;
+            buttonHome.TextImageRelation = TextImageRelation.ImageAboveText;
+            buttonHome.UseVisualStyleBackColor = false;
+
+            if (tableGPU.RowCount < 2)
+            {
+                tableGPU.RowCount = 2;
+            }
+
+            if (tableGPU.RowStyles.Count < 2)
+            {
+                tableGPU.RowStyles.Add(new RowStyle(SizeType.Absolute, 128F));
+            }
+
+            tableGPU.Controls.Add(buttonAway, 2, 1);
+            tableGPU.Controls.Add(buttonHome, 3, 1);
+        }
+
+        private string GetPendingGpuHintText()
+        {
+            int pendingMode = gpuControl.GetPendingGpuMode();
+            if (pendingMode == GPUModeControl.PendingModeNone) return "";
+
+            string modeName = pendingMode == GPUModeControl.PendingModeEco ? Properties.Strings.EcoMode : Properties.Strings.UltimateMode;
+            string hintTemplate = GetLocalized("PendingGpuSwitchActiveHint", "Pending mode: {0}. It will apply after next shutdown.");
+            return hintTemplate.Replace("{0}", modeName);
         }
 
         private void LabelBattery_Click(object? sender, EventArgs e)
@@ -934,9 +1019,19 @@ namespace GHelper
             labelTipGPU.Text = Properties.Strings.OptimizedGPUTooltip;
         }
 
+        private void ButtonAway_MouseHover(object? sender, EventArgs e)
+        {
+            labelTipGPU.Text = GetLocalized("AwayModeTooltip", "Schedule Eco mode for next startup (no immediate restart).");
+        }
+
+        private void ButtonHome_MouseHover(object? sender, EventArgs e)
+        {
+            labelTipGPU.Text = GetLocalized("HomeModeTooltip", "Schedule Ultimate mode for next startup (no immediate restart).");
+        }
+
         private void ButtonGPU_MouseLeave(object? sender, EventArgs e)
         {
-            labelTipGPU.Text = "";
+            labelTipGPU.Text = GetPendingGpuHintText();
         }
 
         private void ButtonXGM_MouseMove(object? sender, MouseEventArgs e)
@@ -947,7 +1042,7 @@ namespace GHelper
             if (!buttonXGM.Visible) return;
 
             labelTipGPU.Text = buttonXGM.Bounds.Contains(table.PointToClient(Cursor.Position)) ?
-                "XGMobile toggle works only in Standard mode" : "";
+                "XGMobile toggle works only in Standard mode" : GetPendingGpuHintText();
 
         }
 
@@ -1491,6 +1586,16 @@ namespace GHelper
             gpuControl.AutoGPUMode(true);
         }
 
+        private void ButtonAway_Click(object? sender, EventArgs e)
+        {
+            gpuControl.SchedulePendingGpuMode(AsusACPI.GPUModeEco);
+        }
+
+        private void ButtonHome_Click(object? sender, EventArgs e)
+        {
+            gpuControl.SchedulePendingGpuMode(AsusACPI.GPUModeUltimate);
+        }
+
         private void ButtonStopGPU_Click(object? sender, EventArgs e)
         {
             gpuControl.KillGPUApps();
@@ -1656,6 +1761,8 @@ namespace GHelper
                 ButtonEnabled(buttonEco, false);
                 ButtonEnabled(buttonStandard, false);
                 ButtonEnabled(buttonUltimate, false);
+                ButtonEnabled(buttonAway, false);
+                ButtonEnabled(buttonHome, false);
             }
             else
             {
@@ -1663,12 +1770,17 @@ namespace GHelper
                 ButtonEnabled(buttonEco, true);
                 ButtonEnabled(buttonStandard, true);
                 ButtonEnabled(buttonUltimate, true);
+                ButtonEnabled(buttonAway, true);
+                ButtonEnabled(buttonHome, true);
             }
 
         }
 
         public void VisualiseGPUButtons(bool eco = true, bool ultimate = true)
         {
+            buttonAway.Visible = eco;
+            buttonHome.Visible = eco && ultimate;
+
             if (!eco)
             {
                 menuEco.Visible = buttonEco.Visible = false;
@@ -1698,6 +1810,8 @@ namespace GHelper
             buttonStandard.Visible = false;
             buttonUltimate.Visible = false;
             buttonOptimized.Visible = false;
+            buttonAway.Visible = false;
+            buttonHome.Visible = false;
             buttonStopGPU.Visible = true;
 
             tableGPU.ColumnCount = 0;
@@ -1719,6 +1833,8 @@ namespace GHelper
                 ButtonEnabled(buttonEco, false);
                 ButtonEnabled(buttonStandard, false);
                 ButtonEnabled(buttonUltimate, false);
+                ButtonEnabled(buttonAway, false);
+                ButtonEnabled(buttonHome, false);
                 ButtonEnabled(buttonXGM, false);
 
                 labelGPU.Text = text;
@@ -1744,6 +1860,8 @@ namespace GHelper
             ButtonEnabled(buttonEco, true);
             ButtonEnabled(buttonStandard, true);
             ButtonEnabled(buttonUltimate, true);
+            ButtonEnabled(buttonAway, true);
+            ButtonEnabled(buttonHome, true);
 
             if (GPUMode == -1)
                 GPUMode = AppConfig.Get("gpu_mode");
@@ -1754,6 +1872,8 @@ namespace GHelper
             buttonStandard.Activated = false;
             buttonUltimate.Activated = false;
             buttonOptimized.Activated = false;
+            buttonAway.Activated = false;
+            buttonHome.Activated = false;
 
             switch (GPUMode)
             {
@@ -1778,8 +1898,13 @@ namespace GHelper
                     break;
             }
 
+            int pendingMode = gpuControl.GetPendingGpuMode();
+            buttonAway.Activated = pendingMode == GPUModeControl.PendingModeEco;
+            buttonHome.Activated = pendingMode == GPUModeControl.PendingModeUltimate;
+
             VisualiseIcon();
             VisualizeXGM(GPUMode);
+            labelTipGPU.Text = GetPendingGpuHintText();
 
             if (isGpuSection)
             {

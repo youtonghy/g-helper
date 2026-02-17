@@ -887,4 +887,31 @@ Do you still want to continue?</value>
   <data name="MouseZoneMode" xml:space="preserve">
     <value>Zone Mode</value>
   </data>
+  <data name="AwayMode" xml:space="preserve">
+    <value>Away</value>
+  </data>
+  <data name="AwayModeTooltip" xml:space="preserve">
+    <value>Schedule Eco mode for next startup (no immediate restart)</value>
+  </data>
+  <data name="HomeMode" xml:space="preserve">
+    <value>Home</value>
+  </data>
+  <data name="HomeModeTooltip" xml:space="preserve">
+    <value>Schedule Ultimate mode for next startup (no immediate restart)</value>
+  </data>
+  <data name="PendingGpuSwitchActiveHint" xml:space="preserve">
+    <value>Pending mode: {0}. It will apply after next shutdown.</value>
+  </data>
+  <data name="PendingGpuSwitchScheduled" xml:space="preserve">
+    <value>Scheduled: {0}. It will apply after your next shutdown.</value>
+  </data>
+  <data name="PendingGpuSwitchUnsupported" xml:space="preserve">
+    <value>This GPU mode is not supported on this device.</value>
+  </data>
+  <data name="PendingGpuSwitchApplied" xml:space="preserve">
+    <value>Pending GPU mode applied: {0}.</value>
+  </data>
+  <data name="PendingGpuSwitchFailed" xml:space="preserve">
+    <value>Failed to apply pending GPU mode: {0}.</value>
+  </data>
 </root>

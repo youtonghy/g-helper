@@ -9,6 +9,13 @@ namespace GHelper.Gpu
 {
     public class GPUModeControl
     {
+        public const int PendingModeNone = 0;
+        public const int PendingModeEco = 1;
+        public const int PendingModeUltimate = 2;
+
+        private const string PendingModeKey = "gpu_pending_mode";
+        private const string PendingCreatedAtKey = "gpu_pending_created_at";
+
         SettingsForm settings;
 
         public static int gpuMode;
@@ -58,6 +65,7 @@ namespace GHelper.Gpu
             }
 
             AppConfig.Set("gpu_mode", gpuMode);
+            ClearPendingModeIfAlreadyActive(gpuMode);
             settings.VisualiseGPUMode(gpuMode);
 
             Aura.CustomRGB.ApplyGPUColor(gpuMode);
@@ -158,6 +166,7 @@ namespace GHelper.Gpu
             if (changed)
             {
                 AppConfig.Set("gpu_mode", GPUMode);
+                ClearPendingGpuMode();
             }
 
             if (restart)
@@ -169,6 +178,169 @@ namespace GHelper.Gpu
         }
 
 
+
+        public int GetPendingGpuMode()
+        {
+            int pendingMode = AppConfig.Get(PendingModeKey, PendingModeNone);
+            return pendingMode switch
+            {
+                PendingModeEco => PendingModeEco,
+                PendingModeUltimate => PendingModeUltimate,
+                _ => PendingModeNone
+            };
+        }
+
+        public void SchedulePendingGpuMode(int gpuMode)
+        {
+            int pendingMode = ToPendingMode(gpuMode);
+            if (pendingMode == PendingModeNone) return;
+
+            if (!IsPendingModeSupported(pendingMode))
+            {
+                string unsupportedTemplate = Properties.Strings.ResourceManager.GetString("PendingGpuSwitchUnsupported", Properties.Strings.Culture) ?? "This GPU mode is not supported on this device.";
+                Program.toast.RunToast(unsupportedTemplate);
+                return;
+            }
+
+            AppConfig.Set(PendingModeKey, pendingMode);
+            AppConfig.Set(PendingCreatedAtKey, (int)DateTimeOffset.Now.ToUnixTimeSeconds());
+
+            settings.VisualiseGPUMode();
+
+            string scheduledTemplate = Properties.Strings.ResourceManager.GetString("PendingGpuSwitchScheduled", Properties.Strings.Culture) ?? "Scheduled: {0}. It will apply after your next shutdown.";
+            Program.toast.RunToast(FormatPendingMessage(scheduledTemplate, pendingMode));
+        }
+
+        public bool ApplyPendingGpuModeOnShutdown()
+        {
+            int pendingMode = GetPendingGpuMode();
+            if (pendingMode == PendingModeNone) return false;
+
+            Logger.WriteLine("Pending GPU mode found on shutdown: " + pendingMode);
+
+            bool applied = pendingMode switch
+            {
+                PendingModeEco => ApplyPendingEcoMode(),
+                PendingModeUltimate => ApplyPendingUltimateMode(),
+                _ => false
+            };
+
+            if (applied)
+            {
+                ClearPendingGpuMode();
+                string appliedTemplate = Properties.Strings.ResourceManager.GetString("PendingGpuSwitchApplied", Properties.Strings.Culture) ?? "Pending GPU mode applied: {0}.";
+                Logger.WriteLine(FormatPendingMessage(appliedTemplate, pendingMode));
+            }
+            else
+            {
+                string failedTemplate = Properties.Strings.ResourceManager.GetString("PendingGpuSwitchFailed", Properties.Strings.Culture) ?? "Failed to apply pending GPU mode: {0}.";
+                Logger.WriteLine(FormatPendingMessage(failedTemplate, pendingMode));
+            }
+
+            return true;
+        }
+
+        private static int ToPendingMode(int gpuMode)
+        {
+            return gpuMode switch
+            {
+                AsusACPI.GPUModeEco => PendingModeEco,
+                AsusACPI.GPUModeUltimate => PendingModeUltimate,
+                _ => PendingModeNone
+            };
+        }
+
+        private static int ToGpuMode(int pendingMode)
+        {
+            return pendingMode switch
+            {
+                PendingModeEco => AsusACPI.GPUModeEco,
+                PendingModeUltimate => AsusACPI.GPUModeUltimate,
+                _ => -1
+            };
+        }
+
+        private bool IsPendingModeSupported(int pendingMode)
+        {
+            return pendingMode switch
+            {
+                PendingModeEco => Program.acpi.DeviceGet(AsusACPI.GPUEco) >= 0,
+                PendingModeUltimate => Program.acpi.DeviceGet(AsusACPI.GPUMux) >= 0,
+                _ => false
+            };
+        }
+
+        private bool ApplyPendingEcoMode()
+        {
+            int mux = Program.acpi.DeviceGet(AsusACPI.GPUMux);
+            if (mux == 0)
+            {
+                int muxStatus = Program.acpi.DeviceSet(AsusACPI.GPUMux, 1, "GPUMux");
+                if (muxStatus < 0 && Program.acpi.DeviceGet(AsusACPI.GPUMux) == 0)
+                {
+                    return false;
+                }
+                Thread.Sleep(500);
+            }
+
+            if (Program.acpi.DeviceGet(AsusACPI.GPUEco) < 0) return false;
+
+            if (Program.acpi.DeviceGet(AsusACPI.GPUEco) == 1) return true;
+
+            int status = Program.acpi.SetGPUEco(1);
+            return status >= 0 || Program.acpi.DeviceGet(AsusACPI.GPUEco) == 1;
+        }
+
+        private bool ApplyPendingUltimateMode()
+        {
+            if (Program.acpi.DeviceGet(AsusACPI.GPUMux) < 0) return false;
+
+            if (Program.acpi.DeviceGet(AsusACPI.GPUMux) == 0) return true;
+
+            if (AppConfig.NoAutoUltimate())
+            {
+                Program.acpi.SetGPUEco(0);
+                Thread.Sleep(500);
+                if (Program.acpi.DeviceGet(AsusACPI.GPUEco) == 1)
+                {
+                    return false;
+                }
+            }
+
+            int status = Program.acpi.DeviceSet(AsusACPI.GPUMux, 0, "GPUMux");
+            return status >= 0 || Program.acpi.DeviceGet(AsusACPI.GPUMux) == 0;
+        }
+
+        private void ClearPendingGpuMode()
+        {
+            if (AppConfig.Get(PendingModeKey, PendingModeNone) == PendingModeNone) return;
+
+            AppConfig.Set(PendingModeKey, PendingModeNone);
+            AppConfig.Remove(PendingCreatedAtKey);
+        }
+
+        private void ClearPendingModeIfAlreadyActive(int currentGpuMode)
+        {
+            int pendingMode = GetPendingGpuMode();
+            if (pendingMode == PendingModeNone) return;
+
+            if (currentGpuMode != ToGpuMode(pendingMode)) return;
+
+            Logger.WriteLine("Pending GPU mode is already active, clearing pending mode.");
+            ClearPendingGpuMode();
+        }
+
+        private static string FormatPendingMessage(string template, int pendingMode)
+        {
+            string modeName = pendingMode switch
+            {
+                PendingModeEco => Properties.Strings.EcoMode,
+                PendingModeUltimate => Properties.Strings.UltimateMode,
+                _ => Properties.Strings.GPUMode
+            };
+
+            return template.Replace("{0}", modeName);
+        }
 
         public void SetGPUEco(int eco)
         {

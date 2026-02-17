@@ -203,7 +203,17 @@ namespace GHelper
 
         private static void SystemEvents_SessionEnding(object sender, SessionEndingEventArgs e)
         {
-            gpuControl.StandardModeFix();
+            bool hasPendingGpuMode = false;
+            if (e.Reason == SessionEndReasons.SystemShutdown)
+            {
+                hasPendingGpuMode = gpuControl.ApplyPendingGpuModeOnShutdown();
+            }
+
+            if (!hasPendingGpuMode)
+            {
+                gpuControl.StandardModeFix();
+            }
+
             modeControl.ShutdownReset();
             BatteryControl.AutoBattery();
             InputDispatcher.ShutdownStatusLed();

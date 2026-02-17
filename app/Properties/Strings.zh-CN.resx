@@ -887,4 +887,31 @@
   <data name="MouseZoneMode" xml:space="preserve">
     <value>Zone 模式</value>
   </data>
+  <data name="AwayMode" xml:space="preserve">
+    <value>外出</value>
+  </data>
+  <data name="AwayModeTooltip" xml:space="preserve">
+    <value>计划在下次启动时切换到集显模式（当前不重启）</value>
+  </data>
+  <data name="HomeMode" xml:space="preserve">
+    <value>归家</value>
+  </data>
+  <data name="HomeModeTooltip" xml:space="preserve">
+    <value>计划在下次启动时切换到独显直连（当前不重启）</value>
+  </data>
+  <data name="PendingGpuSwitchActiveHint" xml:space="preserve">
+    <value>已计划模式：{0}。将在下次关机后生效。</value>
+  </data>
+  <data name="PendingGpuSwitchScheduled" xml:space="preserve">
+    <value>已计划：{0}，将在你下次关机后生效。</value>
+  </data>
+  <data name="PendingGpuSwitchUnsupported" xml:space="preserve">
+    <value>此设备不支持该显卡模式。</value>
+  </data>
+  <data name="PendingGpuSwitchApplied" xml:space="preserve">
+    <value>已应用计划中的显卡模式：{0}。</value>
+  </data>
+  <data name="PendingGpuSwitchFailed" xml:space="preserve">
+    <value>应用计划中的显卡模式失败：{0}。</value>
+  </data>
 </root>
