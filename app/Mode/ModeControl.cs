@@ -17,6 +17,10 @@ namespace GHelper.Mode
         private int _cpuUV = 0;
         private int _igpuUV = 0;
         private bool _ryzenPower = false;
+        private static long _lastWakeReapply = 0;
+
+        private const int WakeReapplyDelayMs = 3000;
+        private const int WakeReapplyCooldownMs = 10000;
 
         static System.Timers.Timer reapplyTimer = default!;
         static System.Timers.Timer modeToggleTimer = default!;
@@ -45,6 +49,35 @@ namespace GHelper.Mode
                 SetPerformanceMode(mode, powerChanged);
             else
                 SetPerformanceMode(Modes.GetCurrent());
+        }
+
+        public void ReapplyCurrentModeAfterWake()
+        {
+            bool shouldReapply = AppConfig.IsModeReapplyRequired()
+                || AppConfig.IsMode("auto_apply")
+                || (AppConfig.IsMode("auto_apply_power") && AppConfig.IsFanRequired());
+
+            if (!shouldReapply) return;
+
+            long now = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+            long lastReapply = Interlocked.Read(ref _lastWakeReapply);
+
+            if (now - lastReapply < WakeReapplyCooldownMs)
+            {
+                Logger.WriteLine("Wake reapply skipped due to cooldown");
+                return;
+            }
+
+            Interlocked.Exchange(ref _lastWakeReapply, now);
+            int currentMode = Modes.GetCurrent();
+
+            Logger.WriteLine($"Wake reapply scheduled for mode {currentMode}");
+            Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(WakeReapplyDelayMs));
+                Logger.WriteLine($"Wake reapply executing for mode {currentMode}");
+                SetPerformanceMode(currentMode);
+            });
         }
 
 

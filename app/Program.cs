@@ -317,6 +317,12 @@ namespace GHelper
                 InputDispatcher.ShutdownStatusLed();
             }
 
+            if (e.Mode == PowerModes.Resume)
+            {
+                Logger.WriteLine("Power Mode Changed: Resume -> scheduling mode/fan reapply");
+                modeControl.ReapplyCurrentModeAfterWake();
+            }
+
             if (SystemInformation.PowerStatus.PowerLineStatus == isPlugged) return;
             Logger.WriteLine($"Power Mode {e.Mode}: {SystemInformation.PowerStatus.PowerLineStatus}");
             
