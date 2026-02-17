@@ -370,7 +370,7 @@
     <value>Eco</value>
   </data>
   <data name="EnableGPUOnShutdown" xml:space="preserve">
-    <value>Enable GPU on shutdown (prevents issue with Eco mode)</value>
+    <value>Enable Optimized mode on shutdown (prevents issue with Eco mode)</value>
   </data>
   <data name="EnableOptimusText" xml:space="preserve">
     <value>Disabling the dGPU by going into Eco mode while Display Mode in NVIDIA Control Panel is not set to Optimus might cause problems with brightness controls until after the next reboot. 
@@ -891,13 +891,13 @@ Do you still want to continue?</value>
     <value>Away</value>
   </data>
   <data name="AwayModeTooltip" xml:space="preserve">
-    <value>Schedule Eco mode for next startup (no immediate restart)</value>
+    <value>Schedule Optimized mode and disable Ultimate after next shutdown (no immediate restart)</value>
   </data>
   <data name="HomeMode" xml:space="preserve">
     <value>Home</value>
   </data>
   <data name="HomeModeTooltip" xml:space="preserve">
-    <value>Schedule Ultimate mode for next startup (no immediate restart)</value>
+    <value>Schedule Ultimate mode after next shutdown (no immediate restart)</value>
   </data>
   <data name="PendingGpuSwitchActiveHint" xml:space="preserve">
     <value>Pending mode: {0}. It will apply after next shutdown.</value>

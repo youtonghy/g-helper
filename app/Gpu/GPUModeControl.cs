@@ -205,6 +205,15 @@ namespace GHelper.Gpu
             AppConfig.Set(PendingModeKey, pendingMode);
             AppConfig.Set(PendingCreatedAtKey, (int)DateTimeOffset.Now.ToUnixTimeSeconds());
 
+            if (pendingMode == PendingModeEco)
+            {
+                AppConfig.Set("gpu_auto", 1);
+            }
+            else if (pendingMode == PendingModeUltimate)
+            {
+                AppConfig.Set("gpu_auto", 0);
+            }
+
             settings.VisualiseGPUMode();
 
             string scheduledTemplate = Properties.Strings.ResourceManager.GetString("PendingGpuSwitchScheduled", Properties.Strings.Culture) ?? "Scheduled: {0}. It will apply after your next shutdown.";
@@ -564,7 +573,7 @@ namespace GHelper.Gpu
         }
 
 
-        // Manually forcing standard mode on shutdown/hibernate for some exotic cases
+        // Keep shutdown GPU safety behavior but switch to Optimized strategy instead of forcing Standard.
         // https://github.com/seerge/g-helper/pull/855 
         public void StandardModeFix(bool hibernate = false)
         {
@@ -572,8 +581,8 @@ namespace GHelper.Gpu
             if (Program.acpi.DeviceGet(AsusACPI.GPUMux) == 0) return; // Ultimate mode
             if (hibernate && !IsHibernationEnabled()) return;
 
-            Logger.WriteLine("Forcing Standard Mode on " + (hibernate ? "hibernation" : "shutdown"));
-            Program.acpi.SetGPUEco(0);
+            Logger.WriteLine("Enabling Optimized GPU strategy on " + (hibernate ? "hibernation" : "shutdown"));
+            AppConfig.Set("gpu_auto", 1);
         }
 
     }

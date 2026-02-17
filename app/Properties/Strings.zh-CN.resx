@@ -370,7 +370,7 @@
     <value>集显模式</value>
   </data>
   <data name="EnableGPUOnShutdown" xml:space="preserve">
-    <value>在关闭时启用 GPU (防止与 Eco 模式出现问题)</value>
+    <value>在关机时启用自动模式（防止与集显模式出现问题）</value>
   </data>
   <data name="EnableOptimusText" xml:space="preserve">
     <value>NVIDIA 控制面板中的显示模式未设置为 Optimus 时，通过集显模式禁用独立显卡可能会使亮度控制出现问题，直到下次重启后才能恢复。
@@ -891,13 +891,13 @@
     <value>外出</value>
   </data>
   <data name="AwayModeTooltip" xml:space="preserve">
-    <value>计划在下次启动时切换到集显模式（当前不重启）</value>
+    <value>计划在下次关机后启用自动模式并退出独显直连（当前不重启）</value>
   </data>
   <data name="HomeMode" xml:space="preserve">
     <value>归家</value>
   </data>
   <data name="HomeModeTooltip" xml:space="preserve">
-    <value>计划在下次启动时切换到独显直连（当前不重启）</value>
+    <value>计划在下次关机后切换到独显直连（当前不重启）</value>
   </data>
   <data name="PendingGpuSwitchActiveHint" xml:space="preserve">
     <value>已计划模式：{0}。将在下次关机后生效。</value>
