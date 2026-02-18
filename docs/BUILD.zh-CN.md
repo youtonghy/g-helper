@@ -38,3 +38,7 @@ dotnet publish app/GHelper.csproj -c Release -p:Platform=x64 -p:PublishSingleFil
 
 dotnet clean app/GHelper.csproj -c Release                       
 dotnet publish app/GHelper.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ./artifacts/publish/win-x64 
+
+dotnet publish app/GHelper.sln -c Release -r win-x64 -p:PublishSingleFile=true --no-self-contained -o artifacts/local-exe
+
+dotnet publish app/GHelper.sln --configuration Release --runtime win-x64 -p:PublishSingleFile=true --no-self-contained 
