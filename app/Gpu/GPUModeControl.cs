@@ -477,16 +477,6 @@ namespace GHelper.Gpu
         }
 
 
-        public void InitXGM()
-        {
-            if (Program.acpi.IsXGConnected())
-            {
-                //Program.acpi.DeviceSet(AsusACPI.GPUXGInit, 1, "XG Init");
-                XGM.Init();
-            }
-
-        }
-
         public void ToggleXGM(bool silent = false)
         {
 
@@ -506,7 +496,12 @@ namespace GHelper.Gpu
                     }
                     else
                     {
-                        DialogResult dialogResult = MessageBox.Show("Did you close all applications running on XG Mobile?", "Disabling XG Mobile", MessageBoxButtons.YesNo);
+                        DialogResult dialogResult = DialogResult.No;
+                        settings.Invoke((MethodInvoker)delegate
+                        {
+                            dialogResult = MessageBox.Show(settings, "Did you close all applications running on XG Mobile?", "Disabling XG Mobile", MessageBoxButtons.YesNo);
+                        });
+                        
                         if (dialogResult == DialogResult.Yes)
                         {
                             Program.acpi.DeviceSet(AsusACPI.GPUXG, 0, "GPU XGM");
@@ -522,8 +517,7 @@ namespace GHelper.Gpu
                     else
                         Program.acpi.DeviceSet(AsusACPI.GPUXG, 1, "GPU XGM");
 
-                    InitXGM();
-                    XGM.Light(AppConfig.Is("xmg_light"));
+                    XGM.Init();
 
                     await Task.Delay(TimeSpan.FromSeconds(15));
 
