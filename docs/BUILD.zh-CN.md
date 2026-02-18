@@ -34,3 +34,7 @@ dotnet publish app/GHelper.csproj -c Release -p:Platform=x64 -p:PublishSingleFil
 
 - 在非 Windows 平台上编译会失败，因为 WinForms 仅支持 Windows。
 - 如果运行时提示缺少权限，请以管理员身份运行生成的 `GHelper.exe`。
+
+
+dotnet clean app/GHelper.csproj -c Release                       
+dotnet publish app/GHelper.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ./artifacts/publish/win-x64 
