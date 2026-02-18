@@ -1,0 +1,64 @@
+name: Release Unsigned
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Git tag to publish (for example: v1.2.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release-unsigned:
+    runs-on: windows-2022
+    env:
+      TAG_NAME: ${{ inputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish
+        run: |
+          dotnet publish app/GHelper.sln --configuration Release --runtime win-x64 -p:PublishSingleFile=true --no-self-contained
+
+      - name: Create ZIP from unsigned EXE
+        shell: pwsh
+        run: |
+          $exePath = "app/bin/x64/Release/net8.0-windows/win-x64/publish/GHelper.exe"
+          $zipPath = "app/bin/x64/Release/net8.0-windows/win-x64/publish/GHelper.zip"
+          Compress-Archive -Path $exePath -DestinationPath $zipPath -Force
+
+      - name: Ensure release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release view "$env:TAG_NAME" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "$env:TAG_NAME" --title "$env:TAG_NAME" --notes "Unsigned build"
+          }
+
+      - name: Upload unsigned EXE and ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $exePath = "app/bin/x64/Release/net8.0-windows/win-x64/publish/GHelper.exe"
+          $zipPath = "app/bin/x64/Release/net8.0-windows/win-x64/publish/GHelper.zip"
+          gh release upload "$env:TAG_NAME" $exePath $zipPath --clobber
+
+      - name: Generate SLSA build provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            app/bin/x64/Release/net8.0-windows/win-x64/publish/GHelper.exe
+            app/bin/x64/Release/net8.0-windows/win-x64/publish/GHelper.zip
