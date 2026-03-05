@@ -997,9 +997,11 @@ namespace GHelper
                         case 0:
                             Logger.WriteLine("Monitor Power Off");
                             Aura.SleepBrightness();
+                            Program.modeControl.SetScreenOffFanKeepAlive(true);
                             break;
                         case 1:
                             Logger.WriteLine("Monitor Power On");
+                            Program.modeControl.SetScreenOffFanKeepAlive(false);
                             if (!Program.SetAutoModes(wakeup: true))
                             {
                                 BatteryControl.AutoBattery();

@@ -18,18 +18,27 @@ namespace GHelper.Mode
         private int _igpuUV = 0;
         private bool _ryzenPower = false;
         private static long _lastWakeReapply = 0;
+        private static int _screenOffFanKeepAliveEnabled = 0;
+        private static int _screenOffFanReapplyRunning = 0;
 
         private const int WakeReapplyDelayMs = 3000;
         private const int WakeReapplyCooldownMs = 10000;
+        private const int ScreenOffFanKeepAliveIntervalMs = 60_000;
+        private const int ScreenOffFanInitialDelayMs = 3000;
 
         static System.Timers.Timer reapplyTimer = default!;
         static System.Timers.Timer modeToggleTimer = default!;
+        static System.Timers.Timer screenOffFanKeepAliveTimer = default!;
 
         public ModeControl()
         {
             reapplyTimer = new System.Timers.Timer(AppConfig.GetMode("reapply_time", 30) * 1000);
             reapplyTimer.Enabled = false;
             reapplyTimer.Elapsed += ReapplyTimer_Elapsed;
+
+            screenOffFanKeepAliveTimer = new System.Timers.Timer(ScreenOffFanKeepAliveIntervalMs);
+            screenOffFanKeepAliveTimer.Enabled = false;
+            screenOffFanKeepAliveTimer.Elapsed += ScreenOffFanKeepAliveTimer_Elapsed;
         }
 
 
@@ -37,6 +46,89 @@ namespace GHelper.Mode
         {
             SetCPUTemp(AppConfig.GetMode("cpu_temp"));
             SetRyzenPower();
+        }
+
+        private static bool IsScreenOffFanKeepAliveRequired()
+        {
+            return AppConfig.IsMode("auto_apply")
+                || (AppConfig.IsMode("auto_apply_power") && AppConfig.IsFanRequired());
+        }
+
+        private void ScreenOffFanKeepAliveTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
+        {
+            ReapplyFansForScreenOffKeepAlive("interval");
+        }
+
+        private void ReapplyFansForScreenOffKeepAlive(string source)
+        {
+            if (Interlocked.CompareExchange(ref _screenOffFanReapplyRunning, 1, 0) == 1)
+            {
+                Logger.WriteLine($"Screen-off fan keep-alive skipped ({source}): reapply already running");
+                return;
+            }
+
+            try
+            {
+                if (Interlocked.CompareExchange(ref _screenOffFanKeepAliveEnabled, 0, 0) == 0)
+                {
+                    Logger.WriteLine($"Screen-off fan keep-alive skipped ({source}): keep-alive not active");
+                    return;
+                }
+
+                if (!IsScreenOffFanKeepAliveRequired())
+                {
+                    Logger.WriteLine($"Screen-off fan keep-alive skipped ({source}): custom fan apply not enabled");
+                    return;
+                }
+
+                Logger.WriteLine($"Screen-off fan keep-alive reapply ({source})");
+                AutoFans();
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine("Screen-off fan keep-alive error: " + ex.Message);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _screenOffFanReapplyRunning, 0);
+            }
+        }
+
+        public void SetScreenOffFanKeepAlive(bool isScreenOff)
+        {
+            if (isScreenOff)
+            {
+                if (!IsScreenOffFanKeepAliveRequired())
+                {
+                    Logger.WriteLine("Screen-off fan keep-alive not started: custom fan apply not enabled");
+                    return;
+                }
+
+                if (Interlocked.CompareExchange(ref _screenOffFanKeepAliveEnabled, 1, 0) == 1)
+                {
+                    Logger.WriteLine("Screen-off fan keep-alive already active");
+                    return;
+                }
+
+                Logger.WriteLine("Screen-off fan keep-alive started");
+                screenOffFanKeepAliveTimer.Start();
+
+                Task.Run(async () =>
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(ScreenOffFanInitialDelayMs));
+                    ReapplyFansForScreenOffKeepAlive("initial");
+                });
+
+                return;
+            }
+
+            bool wasEnabled = Interlocked.Exchange(ref _screenOffFanKeepAliveEnabled, 0) == 1;
+            screenOffFanKeepAliveTimer.Stop();
+
+            if (wasEnabled)
+            {
+                Logger.WriteLine("Screen-off fan keep-alive stopped");
+            }
         }
 
         public void AutoPerformance(bool powerChanged = false)
