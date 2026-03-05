@@ -51,6 +51,10 @@ namespace GHelper
         bool sliderGammaIgnore = false;
         bool activateCheck = false;
 
+        const int performanceModeColumns = 4;
+        readonly Dictionary<int, RButton> performanceModeButtons = new();
+        readonly List<RButton> customModeButtons = new();
+
         RButton buttonAway = new RButton();
         RButton buttonHome = new RButton();
 
@@ -305,8 +309,160 @@ namespace GHelper
             labelBacklight.ForeColor = colorStandard;
             labelBacklight.Click += LabelBacklight_Click;
 
+            RefreshPerformanceModesUI();
             panelPerformance.Focus();
             InitVisual();
+        }
+
+        public void RefreshPerformanceModesUI(bool rebuild = true)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(() => RefreshPerformanceModesUI(rebuild));
+                return;
+            }
+
+            if (rebuild)
+            {
+                BuildPerformanceButtons();
+            }
+
+            ApplyModeButtonActiveState(Modes.GetCurrent());
+        }
+
+        private void BuildPerformanceButtons()
+        {
+            tablePerf.SuspendLayout();
+            SuspendLayout();
+
+            foreach (var button in customModeButtons)
+            {
+                tablePerf.Controls.Remove(button);
+                button.Dispose();
+            }
+            customModeButtons.Clear();
+
+            performanceModeButtons.Clear();
+            tablePerf.Controls.Clear();
+            tablePerf.ColumnStyles.Clear();
+            tablePerf.RowStyles.Clear();
+
+            tablePerf.ColumnCount = performanceModeColumns;
+            for (int i = 0; i < performanceModeColumns; i++)
+            {
+                tablePerf.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / performanceModeColumns));
+            }
+
+            var modeOrder = GetOrderedPerformanceModes();
+            int totalButtons = modeOrder.Count + 1; // + Fans + Power
+            int rowCount = Math.Max(1, (int)Math.Ceiling((double)totalButtons / performanceModeColumns));
+            tablePerf.RowCount = rowCount;
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                tablePerf.RowStyles.Add(new RowStyle(SizeType.Absolute, 128F));
+            }
+
+            int index = 0;
+            foreach (int mode in modeOrder)
+            {
+                var modeButton = GetModeButton(mode);
+                modeButton.Text = Modes.GetName(mode);
+                modeButton.AccessibleName = Modes.GetName(mode);
+
+                tablePerf.Controls.Add(modeButton, index % performanceModeColumns, index / performanceModeColumns);
+                performanceModeButtons[mode] = modeButton;
+                index++;
+            }
+
+            buttonFans.Text = Properties.Strings.FansPower;
+            buttonFans.AccessibleName = Properties.Strings.FansAndPower;
+            buttonFans.Activated = false;
+            buttonFans.BorderColor = colorCustom;
+            tablePerf.Controls.Add(buttonFans, index % performanceModeColumns, index / performanceModeColumns);
+
+            tablePerf.ResumeLayout();
+            ResumeLayout();
+        }
+
+        private List<int> GetOrderedPerformanceModes()
+        {
+            List<int> modes = new();
+
+            if (Modes.Exists(AsusACPI.PerformanceSilent))
+                modes.Add(AsusACPI.PerformanceSilent);
+            if (Modes.Exists(AsusACPI.PerformanceBalanced))
+                modes.Add(AsusACPI.PerformanceBalanced);
+            if (Modes.Exists(AsusACPI.PerformanceTurbo))
+                modes.Add(AsusACPI.PerformanceTurbo);
+
+            var customModes = Modes.GetDictonary()
+                .Keys
+                .Where(mode => mode > AsusACPI.PerformanceSilent)
+                .OrderBy(mode => mode);
+
+            modes.AddRange(customModes);
+
+            return modes;
+        }
+
+        private RButton GetModeButton(int mode)
+        {
+            switch (mode)
+            {
+                case AsusACPI.PerformanceSilent:
+                    return buttonSilent;
+                case AsusACPI.PerformanceBalanced:
+                    return buttonBalanced;
+                case AsusACPI.PerformanceTurbo:
+                    return buttonTurbo;
+                default:
+                    var customButton = new RButton
+                    {
+                        Activated = false,
+                        BackColor = SystemColors.ControlLight,
+                        BorderColor = GetModeColor(mode),
+                        BorderRadius = 5,
+                        Dock = DockStyle.Fill,
+                        FlatStyle = FlatStyle.Flat,
+                        ForeColor = SystemColors.ControlText,
+                        Image = Properties.Resources.icons8_fan_48,
+                        ImageAlign = ContentAlignment.BottomCenter,
+                        Margin = new Padding(4),
+                        Secondary = true,
+                        TextImageRelation = TextImageRelation.ImageAboveText,
+                        UseVisualStyleBackColor = false
+                    };
+
+                    customButton.Click += (sender, args) => Program.modeControl.SetPerformanceMode(mode);
+                    customModeButtons.Add(customButton);
+                    return customButton;
+            }
+        }
+
+        private Color GetModeColor(int mode)
+        {
+            return Modes.GetBase(mode) switch
+            {
+                AsusACPI.PerformanceSilent => colorEco,
+                AsusACPI.PerformanceTurbo => colorTurbo,
+                _ => colorStandard,
+            };
+        }
+
+        private void ApplyModeButtonActiveState(int mode)
+        {
+            buttonFans.Activated = false;
+
+            foreach (var modeButton in performanceModeButtons.Values)
+            {
+                modeButton.Activated = false;
+            }
+
+            if (performanceModeButtons.TryGetValue(mode, out var currentModeButton))
+            {
+                currentModeButton.Activated = true;
+            }
         }
 
         private static string GetLocalized(string key, string fallback)
@@ -1681,32 +1837,7 @@ namespace GHelper
 
         protected void VisualiseMode(int mode)
         {
-            buttonSilent.Activated = false;
-            buttonBalanced.Activated = false;
-            buttonTurbo.Activated = false;
-            buttonFans.Activated = false;
-
-            switch (mode)
-            {
-                case AsusACPI.PerformanceSilent:
-                    buttonSilent.Activated = true;
-                    break;
-                case AsusACPI.PerformanceTurbo:
-                    buttonTurbo.Activated = true;
-                    break;
-                case AsusACPI.PerformanceBalanced:
-                    buttonBalanced.Activated = true;
-                    break;
-                default:
-                    buttonFans.Activated = true;
-                    buttonFans.BorderColor = Modes.GetBase(mode) switch
-                    {
-                        AsusACPI.PerformanceSilent => colorEco,
-                        AsusACPI.PerformanceTurbo => colorTurbo,
-                        _ => colorStandard,
-                    };
-                    break;
-            }
+            ApplyModeButtonActiveState(mode);
 
             foreach (var item in contextMenuStrip.Items)
             {

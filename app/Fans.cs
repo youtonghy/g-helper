@@ -509,6 +509,7 @@ namespace GHelper
             comboModes.DataSource = new BindingSource(Modes.GetDictonary(), null);
             comboModes.DisplayMember = "Value";
             comboModes.ValueMember = "Key";
+            Program.settingsForm.RefreshPerformanceModesUI();
             if (contextMenu) Program.settingsForm.SetContextMenu();
         }
 
