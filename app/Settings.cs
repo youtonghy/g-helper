@@ -162,6 +162,10 @@ namespace GHelper
             buttonEnergySaver.ForeColor = SystemColors.ControlLightLight;
             buttonEnergySaver.Click += ButtonEnergySaver_Click;
 
+            buttonAmdOled.BackColor = colorTurbo;
+            buttonAmdOled.ForeColor = SystemColors.ControlLightLight;
+            buttonAmdOled.Click += ButtonAmdOled_Click;
+
             buttonSilent.Click += ButtonSilent_Click;
             buttonBalanced.Click += ButtonBalanced_Click;
             buttonTurbo.Click += ButtonTurbo_Click;
@@ -532,6 +536,12 @@ namespace GHelper
             return hintTemplate.Replace("{0}", modeName);
         }
 
+        private void ButtonAmdOled_Click(object? sender, EventArgs e)
+        {
+            ProcessHelper.RunCMD(@"C:\Program Files\AMD\CNext\CNext\RadeonSoftware.exe","");
+            activateCheck = true;
+        }
+
         private void LabelBattery_Click(object? sender, EventArgs e)
         {
             HardwareControl.chargeWatt = !HardwareControl.chargeWatt;
@@ -736,6 +746,14 @@ namespace GHelper
             });
         }
 
+        public void VisualiseAmdOled(bool status = false)
+        {
+            Invoke(delegate
+            {
+                buttonAmdOled.Visible = status;
+            });
+        }
+
         public void VisualiseDisabled()
         {
             comboGamut.Enabled = comboColorTemp.Enabled = (SplendidCommand)AppConfig.Get("visual") != SplendidCommand.Disabled;
@@ -845,6 +863,7 @@ namespace GHelper
             if (activateCheck)
             {
                 buttonEnergySaver.Visible = PowerNative.GetBatterySaverStatus();
+                buttonAmdOled.Visible = AmdDisplay.IsOledPowerOptimization();
                 activateCheck = false;
             }
         }
