@@ -35,6 +35,7 @@ namespace GHelper
             panelServices = new Panel();
             pictureService = new PictureBox();
             labelServices = new Label();
+            checkAutoStopAsusServices = new CheckBox();
             buttonServices = new RButton();
             panelBindingsHeader = new Panel();
             pictureBindings = new PictureBox();
@@ -185,11 +186,12 @@ namespace GHelper
             panelServices.AccessibleRole = AccessibleRole.Grouping;
             panelServices.Controls.Add(pictureService);
             panelServices.Controls.Add(labelServices);
+            panelServices.Controls.Add(checkAutoStopAsusServices);
             panelServices.Controls.Add(buttonServices);
             panelServices.Dock = DockStyle.Top;
             panelServices.Location = new Point(15, 1778);
             panelServices.Name = "panelServices";
-            panelServices.Size = new Size(949, 75);
+            panelServices.Size = new Size(949, 111);
             panelServices.TabIndex = 5;
             // 
             // pictureService
@@ -211,6 +213,18 @@ namespace GHelper
             labelServices.Size = new Size(273, 32);
             labelServices.TabIndex = 20;
             labelServices.Text = "Asus Services Running";
+            // 
+            // checkAutoStopAsusServices
+            // 
+            checkAutoStopAsusServices.AutoSize = true;
+            checkAutoStopAsusServices.Location = new Point(57, 54);
+            checkAutoStopAsusServices.Margin = new Padding(5, 3, 5, 3);
+            checkAutoStopAsusServices.Name = "checkAutoStopAsusServices";
+            checkAutoStopAsusServices.Padding = new Padding(3);
+            checkAutoStopAsusServices.Size = new Size(370, 42);
+            checkAutoStopAsusServices.TabIndex = 22;
+            checkAutoStopAsusServices.Text = "Auto-stop ASUS services";
+            checkAutoStopAsusServices.UseVisualStyleBackColor = true;
             // 
             // buttonServices
             // 
@@ -1745,6 +1759,7 @@ namespace GHelper
         private Panel panelServices;
         private RButton buttonServices;
         private Label labelServices;
+        private CheckBox checkAutoStopAsusServices;
         private Panel panelBindingsHeader;
         private Panel panelBindings;
         private TableLayoutPanel tableBindings;

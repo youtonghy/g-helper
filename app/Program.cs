@@ -49,6 +49,12 @@ namespace GHelper
             string action = "";
             if (args.Length > 0) action = args[0];
 
+            if (action == "services-stop")
+            {
+                OptimizationService.StopAsusServices();
+                return;
+            }
+
             if (action == "charge")
             {
                 if (AppConfig.IsZ13())
@@ -137,6 +143,7 @@ namespace GHelper
             XGM.Init();
 
             SetAutoModes(init: true);
+            AsusServiceAutoStop.Trigger("startup");
 
             // Subscribing for system power change events
             SystemEvents.PowerModeChanged += SystemEvents_PowerModeChanged;
@@ -331,6 +338,7 @@ namespace GHelper
             {
                 Logger.WriteLine("Power Mode Changed: Resume -> scheduling mode/fan reapply");
                 modeControl.ReapplyCurrentModeAfterWake();
+                AsusServiceAutoStop.Trigger("resume");
             }
 
             if (SystemInformation.PowerStatus.PowerLineStatus == isPlugged) return;
@@ -347,6 +355,7 @@ namespace GHelper
             }
 
             SetAutoModes(powerChanged: true);
+            AsusServiceAutoStop.Trigger("power-change");
         }
 
         public static void SettingsToggle(bool checkForFocus = true, bool trayClick = false)

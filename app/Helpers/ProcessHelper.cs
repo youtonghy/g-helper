@@ -56,28 +56,38 @@ namespace GHelper.Helpers
 
         public static void RunAsAdmin(string? param = null, bool force = false)
         {
+            RunAsAdminInternal(param, force, true);
+        }
 
-            if (Math.Abs(DateTimeOffset.Now.ToUnixTimeMilliseconds() - lastAdmin) < 2000) return;
+        public static bool RunAsAdminDetached(string? param = null, bool force = false)
+        {
+            return RunAsAdminInternal(param, force, false);
+        }
+
+        private static bool RunAsAdminInternal(string? param, bool force, bool exitCurrentProcess)
+        {
+            if (Math.Abs(DateTimeOffset.Now.ToUnixTimeMilliseconds() - lastAdmin) < 2000) return true;
             lastAdmin = DateTimeOffset.Now.ToUnixTimeMilliseconds();
 
-            // Check if the current user is an administrator
-            if (!IsUserAdministrator() || force)
+            if (IsUserAdministrator() && !force) return true;
+
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.UseShellExecute = true;
+            startInfo.WorkingDirectory = Environment.CurrentDirectory;
+            startInfo.FileName = Application.ExecutablePath;
+            startInfo.Arguments = param;
+            startInfo.Verb = "runas";
+
+            try
             {
-                ProcessStartInfo startInfo = new ProcessStartInfo();
-                startInfo.UseShellExecute = true;
-                startInfo.WorkingDirectory = Environment.CurrentDirectory;
-                startInfo.FileName = Application.ExecutablePath;
-                startInfo.Arguments = param;
-                startInfo.Verb = "runas";
-                try
-                {
-                    Process.Start(startInfo);
-                    Application.Exit();
-                }
-                catch (Exception ex)
-                {
-                    Logger.WriteLine(ex.Message);
-                }
+                Process.Start(startInfo);
+                if (exitCurrentProcess) Application.Exit();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine(ex.Message);
+                return false;
             }
         }
 

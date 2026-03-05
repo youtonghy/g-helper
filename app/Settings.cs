@@ -1337,6 +1337,16 @@ namespace GHelper
             }
         }
 
+        public void SyncAutoStopAsusServicesOption()
+        {
+            if (extraForm == null || extraForm.Text == "") return;
+
+            if (extraForm.InvokeRequired)
+                extraForm.BeginInvoke(extraForm.SyncAutoStopAsusServicesOption);
+            else
+                extraForm.SyncAutoStopAsusServicesOption();
+        }
+
         public void FansInit()
         {
             if (fansForm == null || fansForm.Text == "") return;

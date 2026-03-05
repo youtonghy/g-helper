@@ -153,6 +153,7 @@ namespace GHelper
             checkGpuApps.Text = Properties.Strings.KillGpuApps;
             checkBWIcon.Text = Properties.Strings.BWTrayIcon;
             labelHibernateAfter.Text = Properties.Strings.HibernateAfter;
+            checkAutoStopAsusServices.Text = "Auto-stop ASUS services on startup/power events";
 
             labelAPUMem.Text = Properties.Strings.APUMemory;
 
@@ -436,6 +437,9 @@ namespace GHelper
             checkGpuApps.Checked = AppConfig.Is("kill_gpu_apps");
             checkGpuApps.CheckedChanged += CheckGpuApps_CheckedChanged;
 
+            checkAutoStopAsusServices.Checked = AppConfig.Is("auto_stop_asus_services");
+            checkAutoStopAsusServices.CheckedChanged += CheckAutoStopAsusServices_CheckedChanged;
+
             int bootSound = Program.acpi.DeviceGet(AsusACPI.BootSound);
             if (bootSound < 0 || bootSound > UInt16.MaxValue) bootSound = AppConfig.Get("boot_sound", 0);
 
@@ -479,6 +483,7 @@ namespace GHelper
 
             toolTip.SetToolTip(checkAutoToggleClamshellMode, "Disable sleep on lid close when plugged in and external monitor is connected");
             toolTip.SetToolTip(checkNVPlatform, "Stops NVIDIA services when the discrete GPU is disabled\nand restarts them automatically when the GPU is enabled");
+            toolTip.SetToolTip(checkAutoStopAsusServices, "Automatically checks and stops ASUS services on app start, wake and power changes");
 
             InitCores();
             InitServices();
@@ -724,6 +729,11 @@ namespace GHelper
             }
         }
 
+        public void SyncAutoStopAsusServicesOption()
+        {
+            checkAutoStopAsusServices.Checked = AppConfig.Is("auto_stop_asus_services");
+        }
+
         private void ButtonServices_Click(object? sender, EventArgs e)
         {
             if (ProcessHelper.IsUserAdministrator())
@@ -735,6 +745,12 @@ namespace GHelper
         private void CheckGpuApps_CheckedChanged(object? sender, EventArgs e)
         {
             AppConfig.Set("kill_gpu_apps", (checkGpuApps.Checked ? 1 : 0));
+        }
+
+        private void CheckAutoStopAsusServices_CheckedChanged(object? sender, EventArgs e)
+        {
+            AppConfig.Set("auto_stop_asus_services", (checkAutoStopAsusServices.Checked ? 1 : 0));
+            if (checkAutoStopAsusServices.Checked) AsusServiceAutoStop.Trigger("option-enabled");
         }
 
         private void NumericBacklightTime_ValueChanged(object? sender, EventArgs e)
