@@ -48,10 +48,24 @@ namespace GHelper.Mode
             SetRyzenPower();
         }
 
-        private static bool IsScreenOffFanKeepAliveRequired()
+        private static (bool shouldApply, bool forceApply) GetScreenOffFanKeepAliveApplyState()
         {
-            return AppConfig.IsMode("auto_apply")
-                || (AppConfig.IsMode("auto_apply_power") && AppConfig.IsFanRequired());
+            bool applyFans = AppConfig.IsMode("auto_apply");
+            bool applyPowerFans = AppConfig.IsMode("auto_apply_power") && AppConfig.IsFanRequired();
+            bool shouldApply = applyFans || applyPowerFans;
+            bool forceApply = !applyFans && applyPowerFans;
+            return (shouldApply, forceApply);
+        }
+
+        private void StopScreenOffFanKeepAlive(string reason)
+        {
+            bool wasEnabled = Interlocked.Exchange(ref _screenOffFanKeepAliveEnabled, 0) == 1;
+            screenOffFanKeepAliveTimer.Stop();
+
+            if (wasEnabled)
+            {
+                Logger.WriteLine($"Screen-off fan keep-alive stopped: {reason}");
+            }
         }
 
         private void ScreenOffFanKeepAliveTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
@@ -75,14 +89,16 @@ namespace GHelper.Mode
                     return;
                 }
 
-                if (!IsScreenOffFanKeepAliveRequired())
+                var state = GetScreenOffFanKeepAliveApplyState();
+                if (!state.shouldApply)
                 {
-                    Logger.WriteLine($"Screen-off fan keep-alive skipped ({source}): custom fan apply not enabled");
+                    Logger.WriteLine($"Screen-off fan keep-alive stopped ({source}): custom fan apply no longer enabled");
+                    StopScreenOffFanKeepAlive("apply conditions changed");
                     return;
                 }
 
-                Logger.WriteLine($"Screen-off fan keep-alive reapply ({source})");
-                AutoFans();
+                Logger.WriteLine($"Screen-off fan keep-alive reapply ({source}, force={state.forceApply})");
+                AutoFans(state.forceApply);
             }
             catch (Exception ex)
             {
@@ -98,7 +114,8 @@ namespace GHelper.Mode
         {
             if (isScreenOff)
             {
-                if (!IsScreenOffFanKeepAliveRequired())
+                var state = GetScreenOffFanKeepAliveApplyState();
+                if (!state.shouldApply)
                 {
                     Logger.WriteLine("Screen-off fan keep-alive not started: custom fan apply not enabled");
                     return;
@@ -122,13 +139,7 @@ namespace GHelper.Mode
                 return;
             }
 
-            bool wasEnabled = Interlocked.Exchange(ref _screenOffFanKeepAliveEnabled, 0) == 1;
-            screenOffFanKeepAliveTimer.Stop();
-
-            if (wasEnabled)
-            {
-                Logger.WriteLine("Screen-off fan keep-alive stopped");
-            }
+            StopScreenOffFanKeepAlive("monitor power on");
         }
 
         public void AutoPerformance(bool powerChanged = false)
