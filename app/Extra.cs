@@ -680,7 +680,7 @@ namespace GHelper
         private void InitServices()
         {
 
-            int servicesCount = OptimizationService.GetRunningCount();
+            int servicesCount = AsusService.GetRunningCount();
 
             if (servicesCount > 0)
             {
@@ -702,12 +702,12 @@ namespace GHelper
         {
             buttonServices.Enabled = false;
 
-            if (OptimizationService.GetRunningCount() > 0)
+            if (AsusService.GetRunningCount() > 0)
             {
                 labelServices.Text = Properties.Strings.StoppingServices + " ...";
                 Task.Run(() =>
                 {
-                    OptimizationService.StopAsusServices();
+                    AsusService.StopAsusServices();
                     BeginInvoke(delegate
                     {
                         InitServices();
@@ -720,7 +720,7 @@ namespace GHelper
                 labelServices.Text = Properties.Strings.StartingServices + " ...";
                 Task.Run(() =>
                 {
-                    OptimizationService.StartAsusServices();
+                    AsusService.StartAsusServices();
                     BeginInvoke(delegate
                     {
                         InitServices();

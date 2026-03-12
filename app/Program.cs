@@ -203,6 +203,11 @@ namespace GHelper
                     break;
             }
 
+            Task.Run(() =>
+            {
+                settingsForm.VisualiseArmoury(AsusService.IsArmouryRunning());
+            });
+
             Application.Run();
 
         }
@@ -231,7 +236,13 @@ namespace GHelper
             if (e.Reason == SessionSwitchReason.SessionLogon || e.Reason == SessionSwitchReason.SessionUnlock)
             {
                 Logger.WriteLine("Session:" + e.Reason.ToString());
+                Aura.sessionLock = false;
                 ScreenControl.AutoScreen();
+            }
+            if (e.Reason == SessionSwitchReason.SessionLock)
+            {
+                Logger.WriteLine("Session:" + e.Reason.ToString());
+                Aura.sessionLock = true;
             }
         }
 
