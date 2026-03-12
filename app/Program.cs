@@ -51,7 +51,7 @@ namespace GHelper
 
             if (action == "services-stop")
             {
-                OptimizationService.StopAsusServices();
+                AsusService.StopAsusServices();
                 return;
             }
 

@@ -39,14 +39,14 @@ namespace GHelper.Helpers
         {
             if (!AppConfig.Is("auto_stop_asus_services")) return;
 
-            int servicesCount = OptimizationService.GetRunningCount();
+            int servicesCount = AsusService.GetRunningCount();
             if (servicesCount <= 0) return;
 
             Logger.WriteLine($"Auto-stop ASUS services ({source}): {servicesCount}");
 
             if (ProcessHelper.IsUserAdministrator())
             {
-                OptimizationService.StopAsusServices();
+                AsusService.StopAsusServices();
                 Program.inputDispatcher?.Init();
                 return;
             }
