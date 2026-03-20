@@ -1474,7 +1474,7 @@ namespace GHelper
             pictureColor2.BackColor = Aura.Color2;
             pictureColor2.Visible = Aura.HasSecondColor();
 
-            bool dynamic = AppConfig.IsDynamicLighting() && DynamicLightingHelper.IsEnabled();
+            bool dynamic = AppConfig.IsDynamicLighting() && DynamicLightingHelper.IsEnabled() && !AppConfig.IsDynamicLightingOnly();
 
             if (dynamic)
             {

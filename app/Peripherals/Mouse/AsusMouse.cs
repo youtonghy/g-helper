@@ -982,11 +982,17 @@ namespace GHelper.Peripherals.Mouse
         {
             if (packet[1] == 0x12 && packet[2] == 0x04 && packet[3] == 0x00)
             {
-                return (PollingRate)(packet[13] & 0x07);
-            }
+                byte raw = packet[13];
+                byte highNibble = (byte)(raw >> 4);
 
+                if (highNibble > 0) 
+                    return (PollingRate)highNibble; 
+                else 
+                    return (PollingRate)(raw & 0x0F);
+            }
             return PollingRate.PR125Hz;
         }
+
 
         protected virtual bool ParseAngleSnapping(byte[] packet)
         {

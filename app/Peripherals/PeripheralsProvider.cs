@@ -255,6 +255,10 @@ namespace GHelper.Peripherals
                 using (var stream = device.Open(config))
                 {
                     var response = new byte[64];
+                    stream.Write(new byte[] { 0x03, 0x12, 0x12, 0x01 });
+                    stream.Read(response);
+                    Logger.WriteLine("Omni Mouse ID1: " + Encoding.ASCII.GetString(response.Skip(5).Take(12).ToArray()));
+
                     stream.Write(new byte[] { 0x03, 0x12, 0x12, 0x02 });
                     stream.Read(response);
 
@@ -270,6 +274,7 @@ namespace GHelper.Peripherals
                         var s when s.StartsWith("B23") => new HarpeAceAimLabEditionOmni(),              // B23072800062
                         var s when s.StartsWith("B241") => new HarpeAceAimLabEditionOmni(),             // B24122666771
                         var s when s.StartsWith("B2501") => new HarpeAceAimLabEditionOmni(),            // B25010476524
+                        var s when s.StartsWith("B2504") => new HarpeAceAimLabEditionOmni(),            // B25043063148
                         var s when s.StartsWith("S7") => new HarpeAceMiniOmni(),                        // S7MPKR053847
                         var s when s.StartsWith("B24") => new HarpeAceMiniOmni(),                       // B24082550833
                         var s when s.StartsWith("B25") => new HarpeAceMiniOmni(),                       // B25030817186
