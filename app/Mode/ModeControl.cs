@@ -25,10 +25,55 @@ namespace GHelper.Mode
         private const int WakeReapplyCooldownMs = 10000;
         private const int ScreenOffFanKeepAliveIntervalMs = 60_000;
         private const int ScreenOffFanInitialDelayMs = 3000;
+        private const int FanRetryDelayMs = 250;
 
         static System.Timers.Timer reapplyTimer = default!;
         static System.Timers.Timer modeToggleTimer = default!;
         static System.Timers.Timer screenOffFanKeepAliveTimer = default!;
+
+        private static readonly SemaphoreSlim modeApplySemaphore = new(1, 1);
+        private static long modeApplySequence;
+
+        private sealed class ModeApplySnapshot
+        {
+            public long SequenceId { get; init; }
+            public int Mode { get; init; }
+            public int OldMode { get; init; }
+            public int ModeBase { get; init; }
+            public int OldModeBase { get; init; }
+            public string ModeName { get; init; } = "";
+            public bool ResetRequired { get; init; }
+            public bool StatusModeEnabled { get; init; }
+            public bool ManualModeRequired { get; init; }
+            public bool AutoApplyFans { get; init; }
+            public bool AutoApplyPower { get; init; }
+            public bool ForceApplyFans { get; init; }
+            public bool AutoUV { get; init; }
+            public bool MidFanEnabled { get; init; }
+            public bool XgmFanEnabled { get; init; }
+            public bool FanRequired { get; init; }
+            public bool PowerRequired { get; init; }
+            public int AutoBoost { get; init; }
+            public int LimitTotal { get; init; }
+            public int LimitCpu { get; init; }
+            public int LimitSlow { get; init; }
+            public int LimitFast { get; init; }
+            public int GpuPower { get; init; }
+            public int GpuBoost { get; init; }
+            public int GpuTemp { get; init; }
+            public int GpuCore { get; init; }
+            public int GpuMemory { get; init; }
+            public int GpuClockLimit { get; init; }
+            public int CpuTemp { get; init; }
+            public int CpuUV { get; init; }
+            public int IgpuUV { get; init; }
+            public string? PowerMode { get; init; }
+            public string? ModeCommand { get; init; }
+            public byte[] CpuFanCurve { get; init; } = [];
+            public byte[] GpuFanCurve { get; init; } = [];
+            public byte[] MidFanCurve { get; init; } = [];
+            public byte[] XgmFanCurve { get; init; } = [];
+        }
 
         public ModeControl()
         {
@@ -57,7 +102,7 @@ namespace GHelper.Mode
             return (shouldApply, forceApply);
         }
 
-        private void StopScreenOffFanKeepAlive(string reason)
+        private bool StopScreenOffFanKeepAlive(string reason)
         {
             bool wasEnabled = Interlocked.Exchange(ref _screenOffFanKeepAliveEnabled, 0) == 1;
             screenOffFanKeepAliveTimer.Stop();
@@ -66,6 +111,8 @@ namespace GHelper.Mode
             {
                 Logger.WriteLine($"Screen-off fan keep-alive stopped: {reason}");
             }
+
+            return wasEnabled;
         }
 
         private void ScreenOffFanKeepAliveTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
@@ -110,7 +157,7 @@ namespace GHelper.Mode
             }
         }
 
-        public void SetScreenOffFanKeepAlive(bool isScreenOff)
+        public bool SetScreenOffFanKeepAlive(bool isScreenOff)
         {
             if (isScreenOff)
             {
@@ -118,13 +165,13 @@ namespace GHelper.Mode
                 if (!state.shouldApply)
                 {
                     Logger.WriteLine("Screen-off fan keep-alive not started: custom fan apply not enabled");
-                    return;
+                    return false;
                 }
 
                 if (Interlocked.CompareExchange(ref _screenOffFanKeepAliveEnabled, 1, 0) == 1)
                 {
                     Logger.WriteLine("Screen-off fan keep-alive already active");
-                    return;
+                    return true;
                 }
 
                 Logger.WriteLine("Screen-off fan keep-alive started");
@@ -136,10 +183,10 @@ namespace GHelper.Mode
                     ReapplyFansForScreenOffKeepAlive("initial");
                 });
 
-                return;
+                return true;
             }
 
-            StopScreenOffFanKeepAlive("monitor power on");
+            return StopScreenOffFanKeepAlive("monitor power on");
         }
 
         public void AutoPerformance(bool powerChanged = false)
@@ -183,6 +230,150 @@ namespace GHelper.Mode
             });
         }
 
+        private static bool IsCurrentModeApply(long sequenceId)
+        {
+            return sequenceId == Interlocked.Read(ref modeApplySequence);
+        }
+
+        private static void LogSkippedModeApply(ModeApplySnapshot snapshot, string stage)
+        {
+            Logger.WriteLine($"Mode apply skipped ({stage}): seq={snapshot.SequenceId}, mode={snapshot.Mode}, latest={Interlocked.Read(ref modeApplySequence)}");
+        }
+
+        private static ModeApplySnapshot CreateModeApplySnapshot(int mode, int oldMode)
+        {
+            bool autoApplyFans = AppConfig.IsMode("auto_apply", mode);
+            bool autoApplyPower = AppConfig.IsMode("auto_apply_power", mode);
+            bool fanRequired = AppConfig.IsFanRequired();
+
+            return new ModeApplySnapshot
+            {
+                SequenceId = Interlocked.Increment(ref modeApplySequence),
+                Mode = mode,
+                OldMode = oldMode,
+                ModeBase = Modes.GetBase(mode),
+                OldModeBase = Modes.GetBase(oldMode),
+                ModeName = Modes.GetName(mode),
+                StatusModeEnabled = AppConfig.Is("status_mode"),
+                AutoApplyFans = autoApplyFans,
+                AutoApplyPower = autoApplyPower,
+                AutoUV = AppConfig.IsMode("auto_uv", mode),
+                MidFanEnabled = AppConfig.Is("mid_fan"),
+                XgmFanEnabled = AppConfig.Is("xgm_fan"),
+                FanRequired = fanRequired,
+                PowerRequired = AppConfig.IsPowerRequired(),
+                ForceApplyFans = autoApplyFans || (autoApplyPower && fanRequired),
+                AutoBoost = AppConfig.GetMode("auto_boost", mode, -1),
+                LimitTotal = AppConfig.GetMode("limit_total", mode, -1),
+                LimitCpu = AppConfig.GetMode("limit_cpu", mode, -1),
+                LimitSlow = AppConfig.GetMode("limit_slow", mode, -1),
+                LimitFast = AppConfig.GetMode("limit_fast", mode, -1),
+                GpuPower = AppConfig.GetMode("gpu_power", mode, -1),
+                GpuBoost = AppConfig.GetMode("gpu_boost", mode, -1),
+                GpuTemp = AppConfig.GetMode("gpu_temp", mode, -1),
+                GpuCore = AppConfig.GetMode("gpu_core", mode, -1),
+                GpuMemory = AppConfig.GetMode("gpu_memory", mode, -1),
+                GpuClockLimit = AppConfig.GetMode("gpu_clock_limit", mode, -1),
+                CpuTemp = AppConfig.GetMode("cpu_temp", mode, -1),
+                CpuUV = AppConfig.GetMode("cpu_uv", mode, 0),
+                IgpuUV = AppConfig.GetMode("igpu_uv", mode, 0),
+                PowerMode = AppConfig.GetModeString("powermode", mode),
+                ModeCommand = AppConfig.GetModeString("mode_command", mode),
+                CpuFanCurve = AppConfig.GetFanConfig(AsusFan.CPU, mode),
+                GpuFanCurve = AppConfig.GetFanConfig(AsusFan.GPU, mode),
+                MidFanCurve = AppConfig.GetFanConfig(AsusFan.Mid, mode),
+                XgmFanCurve = AppConfig.GetFanConfig(AsusFan.XGM, mode),
+                ResetRequired = AppConfig.IsResetRequired() && (Modes.GetBase(oldMode) == Modes.GetBase(mode)) && customPower > 0 && !autoApplyPower,
+                ManualModeRequired = autoApplyPower && (AppConfig.Is("manual_mode") || AppConfig.ContainsModel("G733")),
+            };
+        }
+
+        private async Task ApplyPerformanceModeAsync(ModeApplySnapshot snapshot)
+        {
+            await modeApplySemaphore.WaitAsync();
+            try
+            {
+                if (!IsCurrentModeApply(snapshot.SequenceId))
+                {
+                    LogSkippedModeApply(snapshot, "before-start");
+                    return;
+                }
+
+                Logger.WriteLine($"Mode apply start: seq={snapshot.SequenceId}, mode={snapshot.Mode}, base={snapshot.ModeBase}");
+
+                customFans = false;
+                customPower = 0;
+                customTemp = false;
+
+                SetModeLabel(snapshot);
+
+                if (snapshot.ResetRequired)
+                {
+                    Program.acpi.DeviceSet(AsusACPI.PerformanceMode, snapshot.OldModeBase != 1 ? AsusACPI.PerformanceTurbo : AsusACPI.PerformanceBalanced, "ModeReset");
+                    await Task.Delay(TimeSpan.FromMilliseconds(1500));
+
+                    if (!IsCurrentModeApply(snapshot.SequenceId))
+                    {
+                        LogSkippedModeApply(snapshot, "after-reset");
+                        return;
+                    }
+                }
+
+                if (snapshot.StatusModeEnabled)
+                    Program.acpi.DeviceSet(AsusACPI.StatusMode, [0x00, snapshot.ModeBase == AsusACPI.PerformanceSilent ? (byte)0x02 : (byte)0x03], "StatusMode");
+
+                int status = Program.acpi.DeviceSet(AsusACPI.PerformanceMode, snapshot.ManualModeRequired ? AsusACPI.PerformanceManual : snapshot.ModeBase, "Mode");
+                if (status != 1)
+                    Program.acpi.SetVivoMode(snapshot.ModeBase);
+
+                if (!IsCurrentModeApply(snapshot.SequenceId))
+                {
+                    LogSkippedModeApply(snapshot, "after-mode");
+                    return;
+                }
+
+                ApplyGPUClocks(snapshot);
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100));
+                if (!IsCurrentModeApply(snapshot.SequenceId))
+                {
+                    LogSkippedModeApply(snapshot, "before-fans");
+                    return;
+                }
+
+                AutoFans(snapshot, source: "mode-apply");
+
+                await Task.Delay(TimeSpan.FromMilliseconds(1000));
+                if (!IsCurrentModeApply(snapshot.SequenceId))
+                {
+                    LogSkippedModeApply(snapshot, "before-power");
+                    return;
+                }
+
+                AutoPower(snapshot);
+
+                if (!IsCurrentModeApply(snapshot.SequenceId))
+                {
+                    LogSkippedModeApply(snapshot, "after-power");
+                    return;
+                }
+
+                if (snapshot.ModeCommand is not null)
+                {
+                    Logger.WriteLine("Running mode command: " + snapshot.ModeCommand);
+                    RestrictedProcessHelper.RunAsRestrictedUser(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), "/C " + snapshot.ModeCommand);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"Mode apply error: seq={snapshot.SequenceId}, mode={snapshot.Mode}, error={ex}");
+            }
+            finally
+            {
+                modeApplySemaphore.Release();
+            }
+        }
+
 
         public void ResetPerformanceMode()
         {
@@ -212,42 +403,9 @@ namespace GHelper.Mode
 
             Modes.SetCurrent(mode);
 
+            var snapshot = CreateModeApplySnapshot(mode, oldMode);
 
-            Task.Run(async () =>
-            {
-                bool reset = AppConfig.IsResetRequired() && (Modes.GetBase(oldMode) == Modes.GetBase(mode)) && customPower > 0 && !AppConfig.IsMode("auto_apply_power");
-
-                customFans = false;
-                customPower = 0;
-                customTemp = false;
-
-                SetModeLabel();
-
-                // Workaround for not properly resetting limits on G14 2024
-                if (reset)
-                {
-                    Program.acpi.DeviceSet(AsusACPI.PerformanceMode, (Modes.GetBase(oldMode) != 1) ? AsusACPI.PerformanceTurbo : AsusACPI.PerformanceBalanced, "ModeReset");
-                    await Task.Delay(TimeSpan.FromMilliseconds(1500));
-                }
-
-                if (AppConfig.Is("status_mode")) Program.acpi.DeviceSet(AsusACPI.StatusMode, [0x00, Modes.GetBase(mode) == AsusACPI.PerformanceSilent ? (byte)0x02 : (byte)0x03], "StatusMode");
-                int status = Program.acpi.DeviceSet(AsusACPI.PerformanceMode, AppConfig.IsManualModeRequired() ? AsusACPI.PerformanceManual : Modes.GetBase(mode), "Mode");
-                // Vivobook fallback
-                if (status != 1) Program.acpi.SetVivoMode(Modes.GetBase(mode));
-
-                SetGPUClocks();
-
-                await Task.Delay(TimeSpan.FromMilliseconds(100));
-                AutoFans();
-                await Task.Delay(TimeSpan.FromMilliseconds(1000));
-                AutoPower();
-
-                var command = AppConfig.GetModeString("mode_command");
-                if (command is not null)
-                {   Logger.WriteLine("Running mode command: " + command);
-                    RestrictedProcessHelper.RunAsRestrictedUser(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), "/C " + command);
-                }
-            });
+            Task.Run(() => ApplyPerformanceModeAsync(snapshot));
 
 
             if (AppConfig.Is("xgm_fan")) XGM.Reset();
@@ -257,17 +415,17 @@ namespace GHelper.Mode
             if (!AppConfig.Is("skip_powermode"))
             {
                 // Windows power mode
-                if (AppConfig.GetModeString("powermode") is not null)
-                    PowerNative.SetPowerMode(AppConfig.GetModeString("powermode"));
+                if (snapshot.PowerMode is not null)
+                    PowerNative.SetPowerMode(snapshot.PowerMode);
                 else
-                    PowerNative.SetPowerMode(Modes.GetBase(mode));
+                    PowerNative.SetPowerMode(snapshot.ModeBase);
 
                 if (AppConfig.Is("aspm") && PowerNative.GetASPM() > 0) PowerNative.SetASPM(0);
             }
 
             // CPU Boost setting override
-            if (AppConfig.GetMode("auto_boost") != -1)
-                    PowerNative.SetCPUBoost(AppConfig.GetMode("auto_boost"));
+            if (snapshot.AutoBoost != -1)
+                    PowerNative.SetCPUBoost(snapshot.AutoBoost);
 
             settings.FansInit();
         }
@@ -306,98 +464,153 @@ namespace GHelper.Mode
 
         public void AutoFans(bool force = false)
         {
+            AutoFans(null, force, "direct");
+        }
+
+        private void AutoFans(ModeApplySnapshot? snapshot, bool force = false, string source = "direct")
+        {
             customFans = false;
 
-            if (AppConfig.IsMode("auto_apply") || force)
+            bool shouldApply = force || (snapshot?.ForceApplyFans ?? AppConfig.IsMode("auto_apply"));
+            bool shouldApplyPower = snapshot?.AutoApplyPower ?? AppConfig.IsMode("auto_apply_power");
+            bool powerRequired = snapshot?.PowerRequired ?? AppConfig.IsPowerRequired();
+
+            if (!shouldApply && !force)
             {
+                SetModeLabel(snapshot);
+                return;
+            }
 
-                bool xgmFan = false;
-                if (AppConfig.Is("xgm_fan"))
+            bool xgmFan = false;
+            if (snapshot?.XgmFanEnabled ?? AppConfig.Is("xgm_fan"))
+            {
+                byte[] xgmCurve = snapshot?.XgmFanCurve ?? AppConfig.GetFanConfig(AsusFan.XGM);
+                XGM.SetFan(xgmCurve);
+                xgmFan = Program.acpi.IsXGConnected();
+            }
+
+            byte[] cpuCurve = snapshot?.CpuFanCurve ?? AppConfig.GetFanConfig(AsusFan.CPU);
+            byte[] gpuCurve = snapshot?.GpuFanCurve ?? AppConfig.GetFanConfig(AsusFan.GPU);
+            byte[] midCurve = snapshot?.MidFanCurve ?? AppConfig.GetFanConfig(AsusFan.Mid);
+            long sequenceId = snapshot?.SequenceId ?? 0;
+
+            int cpuResult = ApplyFanCurveWithRetry(AsusFan.CPU, cpuCurve, source, sequenceId);
+            int gpuResult = ApplyFanCurveWithRetry(AsusFan.GPU, gpuCurve, source, sequenceId);
+
+            int midResult = 1;
+            if (snapshot?.MidFanEnabled ?? AppConfig.Is("mid_fan"))
+                midResult = ApplyFanCurveWithRetry(AsusFan.Mid, midCurve, source, sequenceId);
+
+            if (midResult != 1)
+                Logger.WriteLine($"Fan curve apply warning: source={source}, seq={sequenceId}, midCurve={midResult}");
+
+            if (cpuResult != 1 || gpuResult != 1)
+            {
+                int cpuRangeResult = Program.acpi.SetFanRange(AsusFan.CPU, cpuCurve);
+                int gpuRangeResult = Program.acpi.SetFanRange(AsusFan.GPU, gpuCurve);
+
+                Logger.WriteLine($"Fan curve fallback: source={source}, seq={sequenceId}, cpuCurve={cpuResult}, cpuRange={cpuRangeResult}, gpuCurve={gpuResult}, gpuRange={gpuRangeResult}, midCurve={midResult}");
+
+                if (cpuRangeResult != 1 || gpuRangeResult != 1)
                 {
-                    XGM.SetFan(AppConfig.GetFanConfig(AsusFan.XGM));
-                    xgmFan = Program.acpi.IsXGConnected();
-                }
-
-                int cpuResult = Program.acpi.SetFanCurve(AsusFan.CPU, AppConfig.GetFanConfig(AsusFan.CPU));
-                int gpuResult = Program.acpi.SetFanCurve(AsusFan.GPU, AppConfig.GetFanConfig(AsusFan.GPU));
-
-                if (AppConfig.Is("mid_fan"))
-                    Program.acpi.SetFanCurve(AsusFan.Mid, AppConfig.GetFanConfig(AsusFan.Mid));
-
-
-                // Alternative way to set fan curve
-                if (cpuResult != 1 || gpuResult != 1)
-                {
-                    cpuResult = Program.acpi.SetFanRange(AsusFan.CPU, AppConfig.GetFanConfig(AsusFan.CPU));
-                    gpuResult = Program.acpi.SetFanRange(AsusFan.GPU, AppConfig.GetFanConfig(AsusFan.GPU));
-
-                    // Something went wrong, resetting to default profile
-                    if (cpuResult != 1 || gpuResult != 1)
-                    {
-                        Program.acpi.DeviceSet(AsusACPI.PerformanceMode, Modes.GetCurrentBase(), "Reset Mode");
-                        settings.LabelFansResult("Model doesn't support custom fan curves");
-                    }
+                    int modeBase = snapshot?.ModeBase ?? Modes.GetCurrentBase();
+                    Program.acpi.DeviceSet(AsusACPI.PerformanceMode, modeBase, "Reset Mode");
+                    settings.LabelFansResult("Temporary fan curve fallback to range mode");
                 }
                 else
                 {
-                    settings.LabelFansResult("");
-                    customFans = true;
+                    settings.LabelFansResult("Temporary fan curve fallback to range mode");
                 }
-
-                // force set PPTs for missbehaving bios on FX507/517 series
-                if ((AppConfig.IsPowerRequired() || xgmFan) && !AppConfig.IsMode("auto_apply_power"))
-                {
-                    Task.Run(async () =>
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(1));
-                        Program.acpi.DeviceSet(AsusACPI.PPT_APUA0, 80, "PowerLimit Fix A0");
-                        Program.acpi.DeviceSet(AsusACPI.PPT_APUA3, 80, "PowerLimit Fix A3");
-                    });
-                }
-
+            }
+            else
+            {
+                settings.LabelFansResult("");
+                customFans = true;
             }
 
-            SetModeLabel();
+            if ((powerRequired || xgmFan) && !shouldApplyPower)
+            {
+                Task.Run(async () =>
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1));
+                    if (sequenceId > 0 && !IsCurrentModeApply(sequenceId)) return;
+                    Program.acpi.DeviceSet(AsusACPI.PPT_APUA0, 80, "PowerLimit Fix A0");
+                    Program.acpi.DeviceSet(AsusACPI.PPT_APUA3, 80, "PowerLimit Fix A3");
+                });
+            }
 
+            SetModeLabel(snapshot);
+        }
+
+        private int ApplyFanCurveWithRetry(AsusFan device, byte[] curve, string source, long sequenceId)
+        {
+            int result = Program.acpi.SetFanCurve(device, curve);
+            if (result == 1) return result;
+
+            Logger.WriteLine($"Fan curve retry scheduled: source={source}, seq={sequenceId}, device={device}, result={result}");
+            Thread.Sleep(FanRetryDelayMs);
+
+            int retryResult = Program.acpi.SetFanCurve(device, curve);
+            if (retryResult != 1)
+                Logger.WriteLine($"Fan curve retry failed: source={source}, seq={sequenceId}, device={device}, result={retryResult}");
+
+            return retryResult;
         }
 
         public void AutoPower(bool launchAsAdmin = false)
         {
+            AutoPower(null, launchAsAdmin);
+        }
 
+        private void AutoPower(ModeApplySnapshot? snapshot, bool launchAsAdmin = false)
+        {
             customPower = 0;
 
-            bool applyPower = AppConfig.IsMode("auto_apply_power");
-            bool applyFans = AppConfig.IsMode("auto_apply");
+            bool applyPower = snapshot?.AutoApplyPower ?? AppConfig.IsMode("auto_apply_power");
+            bool applyFans = snapshot?.AutoApplyFans ?? AppConfig.IsMode("auto_apply");
+            bool fanRequired = snapshot?.FanRequired ?? AppConfig.IsFanRequired();
 
-            if (applyPower && !applyFans && AppConfig.IsFanRequired())
+            if (applyPower && !applyFans && fanRequired)
             {
-                AutoFans(true);
+                AutoFans(snapshot, true, "power-prep");
                 Thread.Sleep(500);
             }
 
-            if (applyPower) SetPower(launchAsAdmin);
+            if (applyPower) SetPower(snapshot, launchAsAdmin);
 
             Thread.Sleep(500);
-            SetGPUPower();
-            AutoRyzen();
-
+            SetGPUPower(snapshot);
+            AutoRyzen(snapshot);
         }
 
         public void SetModeLabel()
         {
-            settings.SetModeLabel(Properties.Strings.PerformanceMode + ": " + Modes.GetCurrentName() + (customFans ? "+" : "") + ((customPower > 0) ? " " + customPower + "W" : ""));
+            SetModeLabel(null);
+        }
+
+        private void SetModeLabel(ModeApplySnapshot? snapshot)
+        {
+            string modeName = snapshot?.ModeName ?? Modes.GetCurrentName();
+            settings.SetModeLabel(Properties.Strings.PerformanceMode + ": " + modeName + (customFans ? "+" : "") + ((customPower > 0) ? " " + customPower + "W" : ""));
         }
 
         public void SetRyzenPower(bool init = false)
+        {
+            SetRyzenPower(null, init);
+        }
+
+        private void SetRyzenPower(ModeApplySnapshot? snapshot, bool init = false)
         {
             if (init) _ryzenPower = true;
 
             if (!_ryzenPower) return;
             if (!RyzenControl.IsRingExsists()) return;
-            if (!AppConfig.IsMode("auto_apply_power")) return;
+            if (!(snapshot?.AutoApplyPower ?? AppConfig.IsMode("auto_apply_power"))) return;
 
-            int limit_total = AppConfig.GetMode("limit_total");
-            int limit_slow = AppConfig.GetMode("limit_slow", limit_total);
+            int limit_total = snapshot?.LimitTotal ?? AppConfig.GetMode("limit_total");
+            int limit_slow = snapshot is not null
+                ? (snapshot.LimitSlow < 0 ? limit_total : snapshot.LimitSlow)
+                : AppConfig.GetMode("limit_slow", limit_total);
 
             if (limit_total > AsusACPI.MaxTotal) return;
             if (limit_total < AsusACPI.MinTotal) return;
@@ -415,14 +628,19 @@ namespace GHelper.Mode
 
         public void SetPower(bool launchAsAdmin = false)
         {
+            SetPower(null, launchAsAdmin);
+        }
+
+        private void SetPower(ModeApplySnapshot? snapshot, bool launchAsAdmin = false)
+        {
 
             bool allAMD = Program.acpi.IsAllAmdPPT();
             bool isAMD = RyzenControl.IsAMD();
 
-            int limit_total = AppConfig.GetMode("limit_total");
-            int limit_cpu = AppConfig.GetMode("limit_cpu");
-            int limit_slow = AppConfig.GetMode("limit_slow");
-            int limit_fast = AppConfig.GetMode("limit_fast");
+            int limit_total = snapshot?.LimitTotal ?? AppConfig.GetMode("limit_total");
+            int limit_cpu = snapshot?.LimitCpu ?? AppConfig.GetMode("limit_cpu");
+            int limit_slow = snapshot?.LimitSlow ?? AppConfig.GetMode("limit_slow");
+            int limit_fast = snapshot?.LimitFast ?? AppConfig.GetMode("limit_fast");
 
             if (limit_slow < 0 || allAMD) limit_slow = limit_total;
 
@@ -450,7 +668,7 @@ namespace GHelper.Mode
 
                 if (ProcessHelper.IsUserAdministrator())
                 {
-                    SetRyzenPower(true);
+                    SetRyzenPower(snapshot, true);
                 }
                 else if (launchAsAdmin)
                 {
@@ -470,7 +688,7 @@ namespace GHelper.Mode
             }
 
 
-            SetModeLabel();
+            SetModeLabel(snapshot);
 
         }
 
@@ -478,42 +696,48 @@ namespace GHelper.Mode
         {
             Task.Run(() =>
             {
-
-                int core = AppConfig.GetMode("gpu_core");
-                int memory = AppConfig.GetMode("gpu_memory");
-                int clock_limit = AppConfig.GetMode("gpu_clock_limit");
-
-                if (reset) core = memory = clock_limit = 0;
-
-                if (core == -1 && memory == -1 && clock_limit == -1) return;
-                //if ((gpu_core > -5 && gpu_core < 5) && (gpu_memory > -5 && gpu_memory < 5)) launchAsAdmin = false;
-
-                if (Program.acpi.DeviceGet(AsusACPI.GPUEco) == 1) { Logger.WriteLine("Clocks: Eco"); return; }
-                if (HardwareControl.GpuControl is null) { Logger.WriteLine("Clocks: NoGPUControl"); return; }
-                if (!HardwareControl.GpuControl!.IsNvidia) { Logger.WriteLine("Clocks: NotNvidia"); return; }
-
-                using NvidiaGpuControl nvControl = (NvidiaGpuControl)HardwareControl.GpuControl;
-                try
-                {
-                    int statusLimit = nvControl.SetMaxGPUClock(clock_limit);
-                    int statusClocks = nvControl.SetClocks(core, memory);
-                    if ((statusLimit != 0 || statusClocks != 0) && launchAsAdmin) ProcessHelper.RunAsAdmin("gpu");
-                }
-                catch (Exception ex)
-                {
-                    Logger.WriteLine("Clocks Error:" + ex.ToString());
-                }
-
-                settings.GPUInit();
+                ApplyGPUClocks(null, launchAsAdmin, reset);
             });
+        }
+
+        private void ApplyGPUClocks(ModeApplySnapshot? snapshot, bool launchAsAdmin = true, bool reset = false)
+        {
+            int core = snapshot?.GpuCore ?? AppConfig.GetMode("gpu_core");
+            int memory = snapshot?.GpuMemory ?? AppConfig.GetMode("gpu_memory");
+            int clockLimit = snapshot?.GpuClockLimit ?? AppConfig.GetMode("gpu_clock_limit");
+
+            if (reset) core = memory = clockLimit = 0;
+            if (core == -1 && memory == -1 && clockLimit == -1) return;
+
+            if (Program.acpi.DeviceGet(AsusACPI.GPUEco) == 1) { Logger.WriteLine("Clocks: Eco"); return; }
+            if (HardwareControl.GpuControl is null) { Logger.WriteLine("Clocks: NoGPUControl"); return; }
+            if (!HardwareControl.GpuControl!.IsNvidia) { Logger.WriteLine("Clocks: NotNvidia"); return; }
+
+            using NvidiaGpuControl nvControl = (NvidiaGpuControl)HardwareControl.GpuControl;
+            try
+            {
+                int statusLimit = nvControl.SetMaxGPUClock(clockLimit);
+                int statusClocks = nvControl.SetClocks(core, memory);
+                if ((statusLimit != 0 || statusClocks != 0) && launchAsAdmin) ProcessHelper.RunAsAdmin("gpu");
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine("Clocks Error:" + ex.ToString());
+            }
+
+            settings.GPUInit();
         }
 
         public void SetGPUPower()
         {
+            SetGPUPower(null);
+        }
 
-            int gpu_boost = AppConfig.GetMode("gpu_boost");
-            int gpu_temp = AppConfig.GetMode("gpu_temp");
-            int gpu_power = AppConfig.GetMode("gpu_power");
+        private void SetGPUPower(ModeApplySnapshot? snapshot)
+        {
+            int gpu_boost = snapshot?.GpuBoost ?? AppConfig.GetMode("gpu_boost");
+            int gpu_temp = snapshot?.GpuTemp ?? AppConfig.GetMode("gpu_temp");
+            int gpu_power = snapshot?.GpuPower ?? AppConfig.GetMode("gpu_power");
 
             int boostResult = -1;
 
@@ -575,6 +799,11 @@ namespace GHelper.Mode
 
         public void SetRyzen(bool launchAsAdmin = false)
         {
+            SetRyzen(null, launchAsAdmin);
+        }
+
+        private void SetRyzen(ModeApplySnapshot? snapshot, bool launchAsAdmin = false)
+        {
             if (!ProcessHelper.IsUserAdministrator())
             {
                 if (launchAsAdmin) ProcessHelper.RunAsAdmin("uv");
@@ -585,16 +814,16 @@ namespace GHelper.Mode
 
             try
             {
-                SetUV(AppConfig.GetMode("cpu_uv", 0));
-                SetUViGPU(AppConfig.GetMode("igpu_uv", 0));
-                SetCPUTemp(AppConfig.GetMode("cpu_temp"), true);
+                SetUV(snapshot?.CpuUV ?? AppConfig.GetMode("cpu_uv", 0));
+                SetUViGPU(snapshot?.IgpuUV ?? AppConfig.GetMode("igpu_uv", 0));
+                SetCPUTemp(snapshot?.CpuTemp ?? AppConfig.GetMode("cpu_temp"), true);
             }
             catch (Exception ex)
             {
                 Logger.WriteLine("UV Error: " + ex.ToString());
             }
 
-            reapplyTimer.Enabled = AppConfig.IsMode("auto_uv");
+            reapplyTimer.Enabled = snapshot?.AutoUV ?? AppConfig.IsMode("auto_uv");
         }
 
         public void ResetRyzen()
@@ -606,9 +835,14 @@ namespace GHelper.Mode
 
         public void AutoRyzen()
         {
+            AutoRyzen(null);
+        }
+
+        private void AutoRyzen(ModeApplySnapshot? snapshot)
+        {
             if (!RyzenControl.IsAMD()) return;
 
-            if (AppConfig.IsMode("auto_uv")) SetRyzen();
+            if (snapshot?.AutoUV ?? AppConfig.IsMode("auto_uv")) SetRyzen(snapshot);
             else ResetRyzen();
         }
 

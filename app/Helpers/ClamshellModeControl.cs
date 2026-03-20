@@ -6,11 +6,22 @@ namespace GHelper.Helpers
 {
     internal class ClamshellModeControl
     {
+        private const int DisplaySettingsDebounceMs = 750;
+
+        private readonly System.Timers.Timer _displaySettingsChangedTimer = new(DisplaySettingsDebounceMs)
+        {
+            AutoReset = false,
+        };
+
+        private int _pendingDisplaySettingsEvents;
+        private bool _lastExternalDisplayConnected;
 
         public ClamshellModeControl()
         {
             //Save current setting if hibernate or shutdown to prevent reverting the user set option.
             CheckAndSaveLidAction();
+            _lastExternalDisplayConnected = DetectExternalDisplayConnected();
+            _displaySettingsChangedTimer.Elapsed += DisplaySettingsChangedTimer_Elapsed;
         }
 
         public bool IsExternalDisplayConnected()
@@ -91,6 +102,7 @@ namespace GHelper.Helpers
         public void UnregisterDisplayEvents()
         {
             SystemEvents.DisplaySettingsChanged -= SystemEvents_DisplaySettingsChanged;
+            _displaySettingsChangedTimer.Stop();
         }
 
         public void RegisterDisplayEvents()
@@ -100,17 +112,51 @@ namespace GHelper.Helpers
 
         private void SystemEvents_DisplaySettingsChanged(object? sender, EventArgs e)
         {
-            Logger.WriteLine("Display configuration changed.");
+            int pending = Interlocked.Increment(ref _pendingDisplaySettingsEvents);
+            Logger.WriteLine($"Display configuration changed queued (events={pending})");
 
+            _displaySettingsChangedTimer.Stop();
+            _displaySettingsChangedTimer.Start();
+        }
+
+        private void DisplaySettingsChangedTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
+        {
+            int pendingEvents = Interlocked.Exchange(ref _pendingDisplaySettingsEvents, 0);
+            bool externalDisplayConnected = DetectExternalDisplayConnected();
+            string reason = GetDisplayChangeReason(externalDisplayConnected);
+
+            Logger.WriteLine($"Display configuration changed ({reason}, events={pendingEvents})");
+
+            int lidActionBefore = -1;
             if (IsClamshellEnabled())
+            {
+                lidActionBefore = PowerNative.GetLidAction(true);
                 ToggleLidAction();
+                int lidActionAfter = PowerNative.GetLidAction(true);
+                if (lidActionBefore != lidActionAfter)
+                    Logger.WriteLine($"Display configuration changed (clamshell-toggle: {lidActionBefore}->{lidActionAfter})");
+            }
+
+            _lastExternalDisplayConnected = externalDisplayConnected;
 
             if (Program.settingsForm.Visible)
                 ScreenControl.InitScreen();
 
             if (AppConfig.IsForceMiniled())
                 ScreenControl.InitMiniled();
+        }
 
+        private bool DetectExternalDisplayConnected()
+        {
+            return IsExternalDisplayConnected();
+        }
+
+        private string GetDisplayChangeReason(bool externalDisplayConnected)
+        {
+            if (externalDisplayConnected != _lastExternalDisplayConnected)
+                return externalDisplayConnected ? "external-monitor-connect" : "external-monitor-disconnect";
+
+            return "display-change";
         }
 
         private static int CheckAndSaveLidAction()

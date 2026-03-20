@@ -268,9 +268,9 @@ public static class AppConfig
         Remove(name + "_" + Modes.GetCurrent());
     }
 
-    public static string GgetParamName(AsusFan device, string paramName = "fan_profile")
+    public static string GgetParamName(AsusFan device, string paramName = "fan_profile", int? mode = null)
     {
-        int mode = Modes.GetCurrent();
+        int modeId = mode ?? Modes.GetCurrent();
         string name;
 
         switch (device)
@@ -290,12 +290,23 @@ public static class AppConfig
 
         }
 
-        return paramName + "_" + name + "_" + mode;
+        return paramName + "_" + name + "_" + modeId;
     }
 
     public static byte[] GetFanConfig(AsusFan device)
     {
         string curveString = GetString(GgetParamName(device));
+        byte[] curve = { };
+
+        if (curveString is not null)
+            curve = StringToBytes(curveString);
+
+        return curve;
+    }
+
+    public static byte[] GetFanConfig(AsusFan device, int mode)
+    {
+        string curveString = GetString(GgetParamName(device, mode: mode));
         byte[] curve = { };
 
         if (curveString is not null)
@@ -359,14 +370,29 @@ public static class AppConfig
         return GetString(name + "_" + Modes.GetCurrent());
     }
 
+    public static string GetModeString(string name, int mode)
+    {
+        return GetString(name + "_" + mode);
+    }
+
     public static int GetMode(string name, int empty = -1)
     {
         return Get(name + "_" + Modes.GetCurrent(), empty);
     }
 
+    public static int GetMode(string name, int mode, int empty)
+    {
+        return Get(name + "_" + mode, empty);
+    }
+
     public static bool IsMode(string name)
     {
         return Get(name + "_" + Modes.GetCurrent()) == 1;
+    }
+
+    public static bool IsMode(string name, int mode)
+    {
+        return Get(name + "_" + mode) == 1;
     }
 
     public static void SetMode(string name, int value)

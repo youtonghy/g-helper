@@ -1019,7 +1019,17 @@ namespace GHelper
                             break;
                         case 1:
                             Logger.WriteLine("Monitor Power On");
-                            Program.modeControl.SetScreenOffFanKeepAlive(false);
+                            bool keepAliveWasActive = Program.modeControl.SetScreenOffFanKeepAlive(false);
+                            if (!keepAliveWasActive)
+                            {
+                                if (Program.WasRecentlyResumed())
+                                    Logger.WriteLine("Monitor Power On ignored: recent real resume is handled separately");
+                                else
+                                    Logger.WriteLine("Monitor Power On ignored: display event is not treated as wake");
+                                break;
+                            }
+
+                            Logger.WriteLine("Monitor Power On -> reapplying after active keep-alive");
                             if (!Program.SetAutoModes(wakeup: true))
                             {
                                 BatteryControl.AutoBattery();

@@ -222,6 +222,7 @@ public class AsusACPI
     private const uint FILE_SHARE_WRITE = 2;
 
     private IntPtr handle;
+    private readonly object _writeLock = new();
 
     // Event handling attempt
 
@@ -403,33 +404,39 @@ public class AsusACPI
 
     public int DeviceSet(uint DeviceID, int Status, string? logName)
     {
-        byte[] args = new byte[8];
-        BitConverter.GetBytes((uint)DeviceID).CopyTo(args, 0);
-        BitConverter.GetBytes((uint)Status).CopyTo(args, 4);
+        lock (_writeLock)
+        {
+            byte[] args = new byte[8];
+            BitConverter.GetBytes((uint)DeviceID).CopyTo(args, 0);
+            BitConverter.GetBytes((uint)Status).CopyTo(args, 4);
 
-        byte[] status = CallMethod(DEVS, args);
-        int result = BitConverter.ToInt32(status, 0);
+            byte[] status = CallMethod(DEVS, args);
+            int result = BitConverter.ToInt32(status, 0);
 
-        if (logName is not null)
-            Logger.WriteLine(logName + " = " + Status + " : " + (result == 1 ? "OK" : result));
+            if (logName is not null)
+                Logger.WriteLine(logName + " = " + Status + " : " + (result == 1 ? "OK" : result));
 
-        return result;
+            return result;
+        }
     }
 
 
     public int DeviceSet(uint DeviceID, byte[] Params, string? logName)
     {
-        byte[] args = new byte[4 + Params.Length];
-        BitConverter.GetBytes((uint)DeviceID).CopyTo(args, 0);
-        Params.CopyTo(args, 4);
+        lock (_writeLock)
+        {
+            byte[] args = new byte[4 + Params.Length];
+            BitConverter.GetBytes((uint)DeviceID).CopyTo(args, 0);
+            Params.CopyTo(args, 4);
 
-        byte[] status = CallMethod(DEVS, args);
-        int result = BitConverter.ToInt32(status, 0);
+            byte[] status = CallMethod(DEVS, args);
+            int result = BitConverter.ToInt32(status, 0);
 
-        if (logName is not null)
-            Logger.WriteLine(logName + " = " + BitConverter.ToString(Params) + " : " + (result == 1 ? "OK" : result));
+            if (logName is not null)
+                Logger.WriteLine(logName + " = " + BitConverter.ToString(Params) + " : " + (result == 1 ? "OK" : result));
 
-        return BitConverter.ToInt32(status, 0);
+            return BitConverter.ToInt32(status, 0);
+        }
     }
 
 

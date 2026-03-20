@@ -37,6 +37,10 @@ namespace GHelper
 
         private static long lastAuto;
         private static long lastTheme;
+        private static long lastSuspend;
+        private static long lastResume;
+
+        private const int RealResumeWindowMs = 15_000;
 
         public static InputDispatcher? inputDispatcher;
 
@@ -335,10 +339,29 @@ namespace GHelper
             return true;
         }
 
+        public static void MarkSuspend()
+        {
+            Interlocked.Exchange(ref lastSuspend, DateTimeOffset.Now.ToUnixTimeMilliseconds());
+        }
+
+        public static void MarkResume()
+        {
+            Interlocked.Exchange(ref lastResume, DateTimeOffset.Now.ToUnixTimeMilliseconds());
+        }
+
+        public static bool WasRecentlyResumed()
+        {
+            long resume = Interlocked.Read(ref lastResume);
+            if (resume <= 0) return false;
+
+            return Math.Abs(DateTimeOffset.Now.ToUnixTimeMilliseconds() - resume) <= RealResumeWindowMs;
+        }
+
         private static void SystemEvents_PowerModeChanged(object sender, PowerModeChangedEventArgs e)
         {
             if (e.Mode == PowerModes.Suspend)
             {
+                MarkSuspend();
                 Logger.WriteLine("Power Mode Changed:" + e.Mode.ToString());
                 gpuControl.StandardModeFix(true);
                 modeControl.ShutdownReset();
@@ -347,6 +370,7 @@ namespace GHelper
 
             if (e.Mode == PowerModes.Resume)
             {
+                MarkResume();
                 Logger.WriteLine("Power Mode Changed: Resume -> scheduling mode/fan reapply");
                 modeControl.ReapplyCurrentModeAfterWake();
                 AsusServiceAutoStop.Trigger("resume");
