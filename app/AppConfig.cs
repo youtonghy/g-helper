@@ -658,7 +658,12 @@ public static class AppConfig
 
     public static bool IsFanOnlyManualModeRequired(int mode)
     {
-        return ContainsModel("GA402X") && IsMode("auto_apply", mode);
+        if (!ContainsModel("GA402X"))
+            return false;
+
+        bool autoApplyFans = IsMode("auto_apply", mode);
+        bool autoApplyPowerFans = IsMode("auto_apply_power", mode) && IsFanRequired();
+        return autoApplyFans || autoApplyPowerFans;
     }
 
     public static bool IsResetRequired()
