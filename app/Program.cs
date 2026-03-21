@@ -413,7 +413,26 @@ namespace GHelper
         public static void HandleMonitorPowerOn(KeepAliveReason keepAliveReason)
         {
             var context = GetMonitorPowerContext();
-            Logger.WriteLine($"Monitor Power On handled without wake reapply: keepAliveReason={keepAliveReason}, context={context.Reason}, source={context.Source}, displayEventAgeMs={context.DisplayEventAgeMs}");
+            string contextDetails = $"keepAliveReason={keepAliveReason}, context={context.Reason}, source={context.Source}, displayEventAgeMs={context.DisplayEventAgeMs}";
+
+            switch (keepAliveReason)
+            {
+                case KeepAliveReason.RealScreenOff:
+                    Logger.WriteLine($"Monitor Power On -> reapplying after real screen-off: {contextDetails}");
+                    if (!SetAutoModes(wakeup: true))
+                    {
+                        Logger.WriteLine("Monitor Power On -> auto modes skipped by wakeup throttle, reapplying battery and current mode");
+                        BatteryControl.AutoBattery();
+                        modeControl.ReapplyCurrentModeAfterWake();
+                    }
+                    break;
+                case KeepAliveReason.None:
+                    Logger.WriteLine($"Monitor Power On handled without wake reapply: {contextDetails}");
+                    break;
+                default:
+                    Logger.WriteLine($"Monitor Power On ignored for keepAliveReason: {contextDetails}");
+                    break;
+            }
         }
 
         private static void SystemEvents_PowerModeChanged(object sender, PowerModeChangedEventArgs e)
