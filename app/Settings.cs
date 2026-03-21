@@ -1013,28 +1013,15 @@ namespace GHelper
                     switch (settings.Data)
                     {
                         case 0:
-                            Logger.WriteLine("Monitor Power Off");
+                            var monitorPowerContext = Program.GetMonitorPowerContext();
+                            Logger.WriteLine($"Monitor Power Off ({monitorPowerContext.Reason}, source={monitorPowerContext.Source}, displayEventAgeMs={monitorPowerContext.DisplayEventAgeMs})");
                             Aura.SleepBrightness();
-                            Program.modeControl.SetScreenOffFanKeepAlive(true);
+                            Program.modeControl.SetScreenOffFanKeepAlive(true, monitorPowerContext.Reason);
                             break;
                         case 1:
                             Logger.WriteLine("Monitor Power On");
-                            bool keepAliveWasActive = Program.modeControl.SetScreenOffFanKeepAlive(false);
-                            if (!keepAliveWasActive)
-                            {
-                                if (Program.WasRecentlyResumed())
-                                    Logger.WriteLine("Monitor Power On ignored: recent real resume is handled separately");
-                                else
-                                    Logger.WriteLine("Monitor Power On ignored: display event is not treated as wake");
-                                break;
-                            }
-
-                            Logger.WriteLine("Monitor Power On -> reapplying after active keep-alive");
-                            if (!Program.SetAutoModes(wakeup: true))
-                            {
-                                BatteryControl.AutoBattery();
-                                Program.modeControl.ReapplyCurrentModeAfterWake();
-                            }
+                            var keepAliveReason = Program.modeControl.SetScreenOffFanKeepAlive(false);
+                            Program.HandleMonitorPowerOn(keepAliveReason);
                             break;
                         case 2:
                             Logger.WriteLine("Monitor Dimmed");

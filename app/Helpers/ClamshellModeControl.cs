@@ -124,6 +124,7 @@ namespace GHelper.Helpers
             int pendingEvents = Interlocked.Exchange(ref _pendingDisplaySettingsEvents, 0);
             bool externalDisplayConnected = DetectExternalDisplayConnected();
             string reason = GetDisplayChangeReason(externalDisplayConnected);
+            bool clamshellToggled = false;
 
             Logger.WriteLine($"Display configuration changed ({reason}, events={pendingEvents})");
 
@@ -134,10 +135,14 @@ namespace GHelper.Helpers
                 ToggleLidAction();
                 int lidActionAfter = PowerNative.GetLidAction(true);
                 if (lidActionBefore != lidActionAfter)
+                {
+                    clamshellToggled = true;
                     Logger.WriteLine($"Display configuration changed (clamshell-toggle: {lidActionBefore}->{lidActionAfter})");
+                }
             }
 
             _lastExternalDisplayConnected = externalDisplayConnected;
+            Program.MarkDisplayTopologyChange(clamshellToggled ? "clamshell-toggle" : reason);
 
             if (Program.settingsForm.Visible)
                 ScreenControl.InitScreen();

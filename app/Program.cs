@@ -39,8 +39,27 @@ namespace GHelper
         private static long lastTheme;
         private static long lastSuspend;
         private static long lastResume;
+        private static long lastDisplayTopologyChange;
+        private static string lastDisplayTopologyReason = "display-change";
+        private static readonly object displayTopologyLock = new();
 
         private const int RealResumeWindowMs = 15_000;
+        private const int DisplayTopologyWindowMs = 5_000;
+
+        public enum KeepAliveReason
+        {
+            None = 0,
+            RealScreenOff = 1,
+            DisplayTopologyChange = 2,
+            ResumeRecovery = 3,
+        }
+
+        public readonly struct MonitorPowerContext(KeepAliveReason reason, string source, long displayEventAgeMs)
+        {
+            public KeepAliveReason Reason { get; } = reason;
+            public string Source { get; } = source;
+            public long DisplayEventAgeMs { get; } = displayEventAgeMs;
+        }
 
         public static InputDispatcher? inputDispatcher;
 
@@ -349,12 +368,52 @@ namespace GHelper
             Interlocked.Exchange(ref lastResume, DateTimeOffset.Now.ToUnixTimeMilliseconds());
         }
 
+        public static void MarkDisplayTopologyChange(string reason)
+        {
+            lock (displayTopologyLock)
+            {
+                lastDisplayTopologyReason = reason;
+                lastDisplayTopologyChange = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+            }
+        }
+
         public static bool WasRecentlyResumed()
         {
             long resume = Interlocked.Read(ref lastResume);
             if (resume <= 0) return false;
 
             return Math.Abs(DateTimeOffset.Now.ToUnixTimeMilliseconds() - resume) <= RealResumeWindowMs;
+        }
+
+        public static MonitorPowerContext GetMonitorPowerContext()
+        {
+            long now = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+
+            lock (displayTopologyLock)
+            {
+                if (lastDisplayTopologyChange > 0)
+                {
+                    long displayEventAgeMs = Math.Abs(now - lastDisplayTopologyChange);
+                    if (displayEventAgeMs <= DisplayTopologyWindowMs)
+                        return new MonitorPowerContext(KeepAliveReason.DisplayTopologyChange, lastDisplayTopologyReason, displayEventAgeMs);
+                }
+            }
+
+            long resume = Interlocked.Read(ref lastResume);
+            if (resume > 0)
+            {
+                long resumeAgeMs = Math.Abs(now - resume);
+                if (resumeAgeMs <= RealResumeWindowMs)
+                    return new MonitorPowerContext(KeepAliveReason.ResumeRecovery, "resume", resumeAgeMs);
+            }
+
+            return new MonitorPowerContext(KeepAliveReason.RealScreenOff, "screen-off", -1);
+        }
+
+        public static void HandleMonitorPowerOn(KeepAliveReason keepAliveReason)
+        {
+            var context = GetMonitorPowerContext();
+            Logger.WriteLine($"Monitor Power On handled without wake reapply: keepAliveReason={keepAliveReason}, context={context.Reason}, source={context.Source}, displayEventAgeMs={context.DisplayEventAgeMs}");
         }
 
         private static void SystemEvents_PowerModeChanged(object sender, PowerModeChangedEventArgs e)

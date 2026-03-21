@@ -19,6 +19,7 @@ namespace GHelper.Mode
         private bool _ryzenPower = false;
         private static long _lastWakeReapply = 0;
         private static int _screenOffFanKeepAliveEnabled = 0;
+        private static int _screenOffFanKeepAliveReason = (int)Program.KeepAliveReason.None;
         private static int _screenOffFanReapplyRunning = 0;
 
         private const int WakeReapplyDelayMs = 3000;
@@ -26,6 +27,7 @@ namespace GHelper.Mode
         private const int ScreenOffFanKeepAliveIntervalMs = 60_000;
         private const int ScreenOffFanInitialDelayMs = 3000;
         private const int FanRetryDelayMs = 250;
+        private const int FanSelfHealDelayMs = 3000;
 
         static System.Timers.Timer reapplyTimer = default!;
         static System.Timers.Timer modeToggleTimer = default!;
@@ -33,6 +35,7 @@ namespace GHelper.Mode
 
         private static readonly SemaphoreSlim modeApplySemaphore = new(1, 1);
         private static long modeApplySequence;
+        private static long fanApplySequence;
 
         private sealed class ModeApplySnapshot
         {
@@ -75,6 +78,29 @@ namespace GHelper.Mode
             public byte[] XgmFanCurve { get; init; } = [];
         }
 
+        private sealed class FanApplySnapshot
+        {
+            public long SequenceId { get; init; }
+            public long ModeSequenceId { get; init; }
+            public int Mode { get; init; }
+            public int ModeBase { get; init; }
+            public string ModeName { get; init; } = "";
+            public bool ForceApply { get; init; }
+            public bool AutoApplyFans { get; init; }
+            public bool AutoApplyPower { get; init; }
+            public bool MidFanEnabled { get; init; }
+            public bool XgmFanEnabled { get; init; }
+            public bool FanRequired { get; init; }
+            public bool PowerRequired { get; init; }
+            public string Source { get; init; } = "direct";
+            public Program.KeepAliveReason KeepAliveReason { get; init; } = Program.KeepAliveReason.None;
+            public bool AllowSelfHeal { get; init; } = true;
+            public byte[] CpuFanCurve { get; init; } = [];
+            public byte[] GpuFanCurve { get; init; } = [];
+            public byte[] MidFanCurve { get; init; } = [];
+            public byte[] XgmFanCurve { get; init; } = [];
+        }
+
         public ModeControl()
         {
             reapplyTimer = new System.Timers.Timer(AppConfig.GetMode("reapply_time", 30) * 1000);
@@ -102,17 +128,23 @@ namespace GHelper.Mode
             return (shouldApply, forceApply);
         }
 
-        private bool StopScreenOffFanKeepAlive(string reason)
+        private static Program.KeepAliveReason GetScreenOffFanKeepAliveReason()
+        {
+            return (Program.KeepAliveReason)Interlocked.CompareExchange(ref _screenOffFanKeepAliveReason, 0, 0);
+        }
+
+        private Program.KeepAliveReason StopScreenOffFanKeepAlive(string reason)
         {
             bool wasEnabled = Interlocked.Exchange(ref _screenOffFanKeepAliveEnabled, 0) == 1;
+            Program.KeepAliveReason keepAliveReason = (Program.KeepAliveReason)Interlocked.Exchange(ref _screenOffFanKeepAliveReason, (int)Program.KeepAliveReason.None);
             screenOffFanKeepAliveTimer.Stop();
 
             if (wasEnabled)
             {
-                Logger.WriteLine($"Screen-off fan keep-alive stopped: {reason}");
+                Logger.WriteLine($"Screen-off fan keep-alive stopped: {reason}, keepAliveReason={keepAliveReason}");
             }
 
-            return wasEnabled;
+            return wasEnabled ? keepAliveReason : Program.KeepAliveReason.None;
         }
 
         private void ScreenOffFanKeepAliveTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
@@ -128,11 +160,23 @@ namespace GHelper.Mode
                 return;
             }
 
+            _ = ReapplyFansForScreenOffKeepAliveAsync(source);
+        }
+
+        private async Task ReapplyFansForScreenOffKeepAliveAsync(string source)
+        {
             try
             {
                 if (Interlocked.CompareExchange(ref _screenOffFanKeepAliveEnabled, 0, 0) == 0)
                 {
                     Logger.WriteLine($"Screen-off fan keep-alive skipped ({source}): keep-alive not active");
+                    return;
+                }
+
+                Program.KeepAliveReason keepAliveReason = GetScreenOffFanKeepAliveReason();
+                if (keepAliveReason != Program.KeepAliveReason.RealScreenOff)
+                {
+                    Logger.WriteLine($"Screen-off fan keep-alive skipped ({source}): keepAliveReason={keepAliveReason}");
                     return;
                 }
 
@@ -144,8 +188,24 @@ namespace GHelper.Mode
                     return;
                 }
 
-                Logger.WriteLine($"Screen-off fan keep-alive reapply ({source}, force={state.forceApply})");
-                AutoFans(state.forceApply);
+                var snapshot = CreateCurrentFanApplySnapshot(state.forceApply, $"screen-off-{source}", keepAliveReason);
+
+                await modeApplySemaphore.WaitAsync();
+                try
+                {
+                    if (!IsCurrentFanApply(snapshot))
+                    {
+                        LogSkippedFanApply(snapshot, "before-start");
+                        return;
+                    }
+
+                    Logger.WriteLine($"Screen-off fan keep-alive reapply ({source}, seq={snapshot.SequenceId}, keepAliveReason={snapshot.KeepAliveReason}, force={snapshot.ForceApply})");
+                    ApplyFanSnapshot(snapshot);
+                }
+                finally
+                {
+                    modeApplySemaphore.Release();
+                }
             }
             catch (Exception ex)
             {
@@ -157,24 +217,32 @@ namespace GHelper.Mode
             }
         }
 
-        public bool SetScreenOffFanKeepAlive(bool isScreenOff)
+        internal Program.KeepAliveReason SetScreenOffFanKeepAlive(bool isScreenOff, Program.KeepAliveReason keepAliveReason = Program.KeepAliveReason.None)
         {
             if (isScreenOff)
             {
+                if (keepAliveReason != Program.KeepAliveReason.RealScreenOff)
+                {
+                    StopScreenOffFanKeepAlive($"non-screen-off event ({keepAliveReason})");
+                    Logger.WriteLine($"Screen-off fan keep-alive not started: keepAliveReason={keepAliveReason}");
+                    return keepAliveReason;
+                }
+
                 var state = GetScreenOffFanKeepAliveApplyState();
                 if (!state.shouldApply)
                 {
                     Logger.WriteLine("Screen-off fan keep-alive not started: custom fan apply not enabled");
-                    return false;
+                    return Program.KeepAliveReason.None;
                 }
 
+                Interlocked.Exchange(ref _screenOffFanKeepAliveReason, (int)keepAliveReason);
                 if (Interlocked.CompareExchange(ref _screenOffFanKeepAliveEnabled, 1, 0) == 1)
                 {
-                    Logger.WriteLine("Screen-off fan keep-alive already active");
-                    return true;
+                    Logger.WriteLine($"Screen-off fan keep-alive already active: keepAliveReason={GetScreenOffFanKeepAliveReason()}");
+                    return keepAliveReason;
                 }
 
-                Logger.WriteLine("Screen-off fan keep-alive started");
+                Logger.WriteLine($"Screen-off fan keep-alive started: keepAliveReason={keepAliveReason}");
                 screenOffFanKeepAliveTimer.Start();
 
                 Task.Run(async () =>
@@ -183,7 +251,7 @@ namespace GHelper.Mode
                     ReapplyFansForScreenOffKeepAlive("initial");
                 });
 
-                return true;
+                return keepAliveReason;
             }
 
             return StopScreenOffFanKeepAlive("monitor power on");
@@ -286,6 +354,147 @@ namespace GHelper.Mode
                 ResetRequired = AppConfig.IsResetRequired() && (Modes.GetBase(oldMode) == Modes.GetBase(mode)) && customPower > 0 && !autoApplyPower,
                 ManualModeRequired = autoApplyPower && (AppConfig.Is("manual_mode") || AppConfig.ContainsModel("G733")),
             };
+        }
+
+        private static byte[] CloneCurve(byte[] curve)
+        {
+            return (byte[])curve.Clone();
+        }
+
+        private static FanApplySnapshot CreateFanApplySnapshot(
+            int mode,
+            int modeBase,
+            string modeName,
+            bool forceApply,
+            bool autoApplyFans,
+            bool autoApplyPower,
+            bool midFanEnabled,
+            bool xgmFanEnabled,
+            bool fanRequired,
+            bool powerRequired,
+            byte[] cpuFanCurve,
+            byte[] gpuFanCurve,
+            byte[] midFanCurve,
+            byte[] xgmFanCurve,
+            string source,
+            Program.KeepAliveReason keepAliveReason = Program.KeepAliveReason.None,
+            bool allowSelfHeal = true,
+            long modeSequenceId = 0)
+        {
+            return new FanApplySnapshot
+            {
+                SequenceId = Interlocked.Increment(ref fanApplySequence),
+                ModeSequenceId = modeSequenceId,
+                Mode = mode,
+                ModeBase = modeBase,
+                ModeName = modeName,
+                ForceApply = forceApply,
+                AutoApplyFans = autoApplyFans,
+                AutoApplyPower = autoApplyPower,
+                MidFanEnabled = midFanEnabled,
+                XgmFanEnabled = xgmFanEnabled,
+                FanRequired = fanRequired,
+                PowerRequired = powerRequired,
+                Source = source,
+                KeepAliveReason = keepAliveReason,
+                AllowSelfHeal = allowSelfHeal,
+                CpuFanCurve = CloneCurve(cpuFanCurve),
+                GpuFanCurve = CloneCurve(gpuFanCurve),
+                MidFanCurve = CloneCurve(midFanCurve),
+                XgmFanCurve = CloneCurve(xgmFanCurve),
+            };
+        }
+
+        private static FanApplySnapshot CreateFanApplySnapshot(ModeApplySnapshot snapshot, string source, Program.KeepAliveReason keepAliveReason = Program.KeepAliveReason.None, bool allowSelfHeal = true, bool forceApply = false)
+        {
+            return CreateFanApplySnapshot(
+                snapshot.Mode,
+                snapshot.ModeBase,
+                snapshot.ModeName,
+                forceApply || (snapshot.AutoApplyPower && snapshot.FanRequired),
+                snapshot.AutoApplyFans,
+                snapshot.AutoApplyPower,
+                snapshot.MidFanEnabled,
+                snapshot.XgmFanEnabled,
+                snapshot.FanRequired,
+                snapshot.PowerRequired,
+                snapshot.CpuFanCurve,
+                snapshot.GpuFanCurve,
+                snapshot.MidFanCurve,
+                snapshot.XgmFanCurve,
+                source,
+                keepAliveReason,
+                allowSelfHeal,
+                snapshot.SequenceId);
+        }
+
+        private static FanApplySnapshot CreateCurrentFanApplySnapshot(bool forceApply, string source, Program.KeepAliveReason keepAliveReason = Program.KeepAliveReason.None, bool allowSelfHeal = true)
+        {
+            int currentMode = Modes.GetCurrent();
+            bool autoApplyFans = AppConfig.IsMode("auto_apply", currentMode);
+            bool autoApplyPower = AppConfig.IsMode("auto_apply_power", currentMode);
+
+            return CreateFanApplySnapshot(
+                currentMode,
+                Modes.GetBase(currentMode),
+                Modes.GetName(currentMode),
+                forceApply,
+                autoApplyFans,
+                autoApplyPower,
+                AppConfig.Is("mid_fan"),
+                AppConfig.Is("xgm_fan"),
+                AppConfig.IsFanRequired(),
+                AppConfig.IsPowerRequired(),
+                AppConfig.GetFanConfig(AsusFan.CPU, currentMode),
+                AppConfig.GetFanConfig(AsusFan.GPU, currentMode),
+                AppConfig.GetFanConfig(AsusFan.Mid, currentMode),
+                AppConfig.GetFanConfig(AsusFan.XGM, currentMode),
+                source,
+                keepAliveReason,
+                allowSelfHeal,
+                Interlocked.Read(ref modeApplySequence));
+        }
+
+        private static FanApplySnapshot CloneFanApplySnapshot(FanApplySnapshot snapshot, string source, bool allowSelfHeal)
+        {
+            return CreateFanApplySnapshot(
+                snapshot.Mode,
+                snapshot.ModeBase,
+                snapshot.ModeName,
+                snapshot.ForceApply,
+                snapshot.AutoApplyFans,
+                snapshot.AutoApplyPower,
+                snapshot.MidFanEnabled,
+                snapshot.XgmFanEnabled,
+                snapshot.FanRequired,
+                snapshot.PowerRequired,
+                snapshot.CpuFanCurve,
+                snapshot.GpuFanCurve,
+                snapshot.MidFanCurve,
+                snapshot.XgmFanCurve,
+                source,
+                snapshot.KeepAliveReason,
+                allowSelfHeal,
+                snapshot.ModeSequenceId);
+        }
+
+        private static bool IsCurrentFanApply(FanApplySnapshot snapshot)
+        {
+            if (snapshot.SequenceId != Interlocked.Read(ref fanApplySequence))
+                return false;
+
+            if (snapshot.ModeSequenceId > 0 && snapshot.ModeSequenceId != Interlocked.Read(ref modeApplySequence))
+                return false;
+
+            if (snapshot.KeepAliveReason != Program.KeepAliveReason.None && Interlocked.CompareExchange(ref _screenOffFanKeepAliveEnabled, 0, 0) == 0)
+                return false;
+
+            return true;
+        }
+
+        private static void LogSkippedFanApply(FanApplySnapshot snapshot, string stage)
+        {
+            Logger.WriteLine($"Fan apply skipped ({stage}): seq={snapshot.SequenceId}, source={snapshot.Source}, mode={snapshot.Mode}, keepAliveReason={snapshot.KeepAliveReason}, latestFan={Interlocked.Read(ref fanApplySequence)}, latestMode={Interlocked.Read(ref modeApplySequence)}");
         }
 
         private async Task ApplyPerformanceModeAsync(ModeApplySnapshot snapshot)
@@ -464,63 +673,104 @@ namespace GHelper.Mode
 
         public void AutoFans(bool force = false)
         {
-            AutoFans(null, force, "direct");
+            _ = ApplyStandaloneFanSnapshotAsync(CreateCurrentFanApplySnapshot(force, "direct"));
+        }
+
+        private async Task ApplyStandaloneFanSnapshotAsync(FanApplySnapshot snapshot)
+        {
+            await modeApplySemaphore.WaitAsync();
+            try
+            {
+                if (!IsCurrentFanApply(snapshot))
+                {
+                    LogSkippedFanApply(snapshot, "before-start");
+                    return;
+                }
+
+                ApplyFanSnapshot(snapshot);
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"Fan apply error: seq={snapshot.SequenceId}, source={snapshot.Source}, keepAliveReason={snapshot.KeepAliveReason}, error={ex}");
+            }
+            finally
+            {
+                modeApplySemaphore.Release();
+            }
         }
 
         private void AutoFans(ModeApplySnapshot? snapshot, bool force = false, string source = "direct")
         {
+            FanApplySnapshot fanSnapshot = snapshot is not null
+                ? CreateFanApplySnapshot(snapshot, source, forceApply: force)
+                : CreateCurrentFanApplySnapshot(force, source);
+
+            ApplyFanSnapshot(fanSnapshot);
+        }
+
+        private void ApplyFanSnapshot(FanApplySnapshot snapshot)
+        {
             customFans = false;
 
-            bool shouldApply = force || (snapshot?.ForceApplyFans ?? AppConfig.IsMode("auto_apply"));
-            bool shouldApplyPower = snapshot?.AutoApplyPower ?? AppConfig.IsMode("auto_apply_power");
-            bool powerRequired = snapshot?.PowerRequired ?? AppConfig.IsPowerRequired();
+            bool shouldApply = snapshot.ForceApply || snapshot.AutoApplyFans;
+            bool shouldApplyPower = snapshot.AutoApplyPower;
+            bool powerRequired = snapshot.PowerRequired;
 
-            if (!shouldApply && !force)
+            if (!shouldApply)
             {
                 SetModeLabel(snapshot);
                 return;
             }
 
             bool xgmFan = false;
-            if (snapshot?.XgmFanEnabled ?? AppConfig.Is("xgm_fan"))
+            if (snapshot.XgmFanEnabled)
             {
-                byte[] xgmCurve = snapshot?.XgmFanCurve ?? AppConfig.GetFanConfig(AsusFan.XGM);
-                XGM.SetFan(xgmCurve);
+                XGM.SetFan(CloneCurve(snapshot.XgmFanCurve));
                 xgmFan = Program.acpi.IsXGConnected();
             }
 
-            byte[] cpuCurve = snapshot?.CpuFanCurve ?? AppConfig.GetFanConfig(AsusFan.CPU);
-            byte[] gpuCurve = snapshot?.GpuFanCurve ?? AppConfig.GetFanConfig(AsusFan.GPU);
-            byte[] midCurve = snapshot?.MidFanCurve ?? AppConfig.GetFanConfig(AsusFan.Mid);
-            long sequenceId = snapshot?.SequenceId ?? 0;
+            byte[] cpuCurve = CloneCurve(snapshot.CpuFanCurve);
+            byte[] gpuCurve = CloneCurve(snapshot.GpuFanCurve);
+            byte[] midCurve = CloneCurve(snapshot.MidFanCurve);
 
-            int cpuResult = ApplyFanCurveWithRetry(AsusFan.CPU, cpuCurve, source, sequenceId);
-            int gpuResult = ApplyFanCurveWithRetry(AsusFan.GPU, gpuCurve, source, sequenceId);
+            int cpuResult = ApplyFanCurveWithRetry(AsusFan.CPU, cpuCurve, snapshot);
+            int gpuResult = ApplyFanCurveWithRetry(AsusFan.GPU, gpuCurve, snapshot);
 
             int midResult = 1;
-            if (snapshot?.MidFanEnabled ?? AppConfig.Is("mid_fan"))
-                midResult = ApplyFanCurveWithRetry(AsusFan.Mid, midCurve, source, sequenceId);
+            if (snapshot.MidFanEnabled)
+                midResult = ApplyFanCurveWithRetry(AsusFan.Mid, midCurve, snapshot);
 
             if (midResult != 1)
-                Logger.WriteLine($"Fan curve apply warning: source={source}, seq={sequenceId}, midCurve={midResult}");
+                Logger.WriteLine($"Fan curve apply warning: source={snapshot.Source}, seq={snapshot.SequenceId}, keepAliveReason={snapshot.KeepAliveReason}, midCurve={midResult}");
 
-            if (cpuResult != 1 || gpuResult != 1)
+            List<string> fallbackDevices = [];
+            bool fallbackApplied = false;
+            bool unsupportedCustomCurve = false;
+
+            if (cpuResult != 1)
             {
-                int cpuRangeResult = Program.acpi.SetFanRange(AsusFan.CPU, cpuCurve);
-                int gpuRangeResult = Program.acpi.SetFanRange(AsusFan.GPU, gpuCurve);
+                fallbackDevices.Add("CPU");
+                fallbackApplied = true;
+                unsupportedCustomCurve |= ApplyFanRangeFallback(AsusFan.CPU, cpuCurve, snapshot, cpuResult) != 1;
+            }
 
-                Logger.WriteLine($"Fan curve fallback: source={source}, seq={sequenceId}, cpuCurve={cpuResult}, cpuRange={cpuRangeResult}, gpuCurve={gpuResult}, gpuRange={gpuRangeResult}, midCurve={midResult}");
+            if (gpuResult != 1)
+            {
+                fallbackDevices.Add("GPU");
+                fallbackApplied = true;
+                unsupportedCustomCurve |= ApplyFanRangeFallback(AsusFan.GPU, gpuCurve, snapshot, gpuResult) != 1;
+            }
 
-                if (cpuRangeResult != 1 || gpuRangeResult != 1)
-                {
-                    int modeBase = snapshot?.ModeBase ?? Modes.GetCurrentBase();
-                    Program.acpi.DeviceSet(AsusACPI.PerformanceMode, modeBase, "Reset Mode");
-                    settings.LabelFansResult("Temporary fan curve fallback to range mode");
-                }
-                else
-                {
-                    settings.LabelFansResult("Temporary fan curve fallback to range mode");
-                }
+            if (unsupportedCustomCurve)
+            {
+                Program.acpi.DeviceSet(AsusACPI.PerformanceMode, snapshot.ModeBase, "Reset Mode");
+                settings.LabelFansResult("Model doesn't support custom fan curves");
+            }
+            else if (fallbackApplied)
+            {
+                settings.LabelFansResult("Temporary fan curve fallback to range mode");
+                if (snapshot.AllowSelfHeal)
+                    ScheduleFanCurveSelfHeal(snapshot, string.Join(",", fallbackDevices));
             }
             else
             {
@@ -533,7 +783,7 @@ namespace GHelper.Mode
                 Task.Run(async () =>
                 {
                     await Task.Delay(TimeSpan.FromSeconds(1));
-                    if (sequenceId > 0 && !IsCurrentModeApply(sequenceId)) return;
+                    if (snapshot.ModeSequenceId > 0 && snapshot.ModeSequenceId != Interlocked.Read(ref modeApplySequence)) return;
                     Program.acpi.DeviceSet(AsusACPI.PPT_APUA0, 80, "PowerLimit Fix A0");
                     Program.acpi.DeviceSet(AsusACPI.PPT_APUA3, 80, "PowerLimit Fix A3");
                 });
@@ -542,17 +792,36 @@ namespace GHelper.Mode
             SetModeLabel(snapshot);
         }
 
-        private int ApplyFanCurveWithRetry(AsusFan device, byte[] curve, string source, long sequenceId)
+        private int ApplyFanRangeFallback(AsusFan device, byte[] curve, FanApplySnapshot snapshot, int curveResult)
         {
-            int result = Program.acpi.SetFanCurve(device, curve);
+            int rangeResult = Program.acpi.SetFanRange(device, CloneCurve(curve));
+            Logger.WriteLine($"Fan curve fallback: source={snapshot.Source}, seq={snapshot.SequenceId}, keepAliveReason={snapshot.KeepAliveReason}, fanFallbackDevice={device}, curveResult={curveResult}, rangeResult={rangeResult}");
+            return rangeResult;
+        }
+
+        private void ScheduleFanCurveSelfHeal(FanApplySnapshot snapshot, string fallbackDevices)
+        {
+            Logger.WriteLine($"Fan curve self-heal scheduled: source={snapshot.Source}, seq={snapshot.SequenceId}, keepAliveReason={snapshot.KeepAliveReason}, fanFallbackDevice={fallbackDevices}");
+
+            Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(FanSelfHealDelayMs));
+                FanApplySnapshot retrySnapshot = CloneFanApplySnapshot(snapshot, $"{snapshot.Source}-self-heal", false);
+                await ApplyStandaloneFanSnapshotAsync(retrySnapshot);
+            });
+        }
+
+        private int ApplyFanCurveWithRetry(AsusFan device, byte[] curve, FanApplySnapshot snapshot)
+        {
+            int result = Program.acpi.SetFanCurve(device, CloneCurve(curve));
             if (result == 1) return result;
 
-            Logger.WriteLine($"Fan curve retry scheduled: source={source}, seq={sequenceId}, device={device}, result={result}");
+            Logger.WriteLine($"Fan curve retry scheduled: source={snapshot.Source}, seq={snapshot.SequenceId}, keepAliveReason={snapshot.KeepAliveReason}, device={device}, result={result}");
             Thread.Sleep(FanRetryDelayMs);
 
-            int retryResult = Program.acpi.SetFanCurve(device, curve);
+            int retryResult = Program.acpi.SetFanCurve(device, CloneCurve(curve));
             if (retryResult != 1)
-                Logger.WriteLine($"Fan curve retry failed: source={source}, seq={sequenceId}, device={device}, result={retryResult}");
+                Logger.WriteLine($"Fan curve retry failed: source={snapshot.Source}, seq={snapshot.SequenceId}, keepAliveReason={snapshot.KeepAliveReason}, device={device}, result={retryResult}");
 
             return retryResult;
         }
@@ -585,7 +854,12 @@ namespace GHelper.Mode
 
         public void SetModeLabel()
         {
-            SetModeLabel(null);
+            SetModeLabel((ModeApplySnapshot?)null);
+        }
+
+        private void SetModeLabel(FanApplySnapshot snapshot)
+        {
+            settings.SetModeLabel(Properties.Strings.PerformanceMode + ": " + snapshot.ModeName + (customFans ? "+" : "") + ((customPower > 0) ? " " + customPower + "W" : ""));
         }
 
         private void SetModeLabel(ModeApplySnapshot? snapshot)

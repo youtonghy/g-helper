@@ -558,23 +558,24 @@ public class AsusACPI
         if (curve.All(singleByte => singleByte == 0)) return -1;
 
         int result;
+        byte[] scaledCurve = (byte[])curve.Clone();
 
         int fanScale = AppConfig.Get("fan_scale", 100);
 
         if (fanScale != 100 && device == AsusFan.CPU) Logger.WriteLine("Custom fan scale: " + fanScale);
 
-        for (int i = 8; i < curve.Length; i++) curve[i] = (byte)(Math.Max((byte)0, Math.Min((byte)100, curve[i])) * fanScale / 100);
+        for (int i = 8; i < scaledCurve.Length; i++) scaledCurve[i] = (byte)(Math.Max((byte)0, Math.Min((byte)100, scaledCurve[i])) * fanScale / 100);
 
         switch (device)
         {
             case AsusFan.GPU:
-                result = DeviceSet(DevsGPUFanCurve, curve, "FanGPU");
+                result = DeviceSet(DevsGPUFanCurve, scaledCurve, "FanGPU");
                 break;
             case AsusFan.Mid:
-                result = DeviceSet(DevsMidFanCurve, curve, "FanMid");
+                result = DeviceSet(DevsMidFanCurve, scaledCurve, "FanMid");
                 break;
             default:
-                result = DeviceSet(DevsCPUFanCurve, curve, "FanCPU");
+                result = DeviceSet(DevsCPUFanCurve, scaledCurve, "FanCPU");
                 break;
         }
 
