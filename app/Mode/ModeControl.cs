@@ -1,4 +1,5 @@
-﻿using GHelper.Gpu.NVidia;
+﻿using GHelper.Fan;
+using GHelper.Gpu.NVidia;
 using GHelper.Helpers;
 using GHelper.USB;
 using Ryzen;
@@ -38,7 +39,7 @@ namespace GHelper.Mode
         private const int ActiveFanWatchdogIntervalMs = 10_000;
         private const int FanDriftHitThreshold = 3;
         private const int FanDriftDeltaThreshold = 15;
-        private const int FanDriftHighFanThreshold = 45;
+        private const int FanDriftHighFanThreshold = 75;
         private const int SilentBounceCooldownMs = 5 * 60 * 1000;
         private const int SilentBounceDelayMs = 1500;
 
@@ -154,6 +155,8 @@ namespace GHelper.Mode
             activeFanWatchdogTimer = new System.Timers.Timer(ActiveFanWatchdogIntervalMs);
             activeFanWatchdogTimer.Enabled = false;
             activeFanWatchdogTimer.Elapsed += ActiveFanWatchdogTimer_Elapsed;
+
+            UpdateActiveFanWatchdogState("init");
         }
 
 
@@ -175,6 +178,9 @@ namespace GHelper.Mode
         {
             try
             {
+                if (modeApplySemaphore.CurrentCount == 0)
+                    return;
+
                 ActiveFanWatchdogSnapshot? snapshot = CreateActiveFanWatchdogSnapshot();
                 if (snapshot is null)
                 {
@@ -183,9 +189,11 @@ namespace GHelper.Mode
                 }
 
                 ActiveFanWatchdogSample sample = CaptureActiveFanWatchdogSample(snapshot);
+                if (modeApplySemaphore.CurrentCount == 0 || snapshot.SequenceId != Interlocked.Read(ref modeApplySequence))
+                    return;
 
-                bool cpuDrift = IsFanDrift(sample.CpuFan, sample.ExpectedCpuFan);
-                bool gpuDrift = IsFanDrift(sample.GpuFan, sample.ExpectedGpuFan);
+                bool cpuDrift = IsFanDrift(AsusFan.CPU, sample.CpuFan, sample.ExpectedCpuFan);
+                bool gpuDrift = IsFanDrift(AsusFan.GPU, sample.GpuFan, sample.ExpectedGpuFan);
 
                 int cpuHits = cpuDrift ? Interlocked.Increment(ref _cpuFanDriftHits) : Interlocked.Exchange(ref _cpuFanDriftHits, 0);
                 int gpuHits = gpuDrift ? Interlocked.Increment(ref _gpuFanDriftHits) : Interlocked.Exchange(ref _gpuFanDriftHits, 0);
@@ -290,16 +298,27 @@ namespace GHelper.Mode
                 GpuTemp = gpuTemp,
                 CpuFan = Program.acpi.GetFan(AsusFan.CPU),
                 GpuFan = Program.acpi.GetFan(AsusFan.GPU),
-                ExpectedCpuFan = GetExpectedFanFromCurve(snapshot.CpuFanCurve, cpuTemp),
-                ExpectedGpuFan = GetExpectedFanFromCurve(snapshot.GpuFanCurve, gpuTemp),
+                ExpectedCpuFan = GetExpectedFanFromCurve(AsusFan.CPU, snapshot.CpuFanCurve, cpuTemp),
+                ExpectedGpuFan = GetExpectedFanFromCurve(AsusFan.GPU, snapshot.GpuFanCurve, gpuTemp),
             };
         }
 
-        private static int GetExpectedFanFromCurve(byte[] curve, int temperature)
+        private static int GetExpectedFanFromCurve(AsusFan device, byte[] curve, int temperature)
         {
-            if (curve.Length != 16 || temperature < 0)
+            if (curve.Length != 16 || temperature < 0 || AsusACPI.IsEmptyCurve(curve))
                 return -1;
 
+            int expectedPercent = GetExpectedFanPercent(curve, temperature);
+            int fanScale = AppConfig.Get("fan_scale", 100);
+            expectedPercent = Math.Clamp(expectedPercent * fanScale / 100, 0, 100);
+
+            int minFan = FanSensorControl.GetFanMin(device);
+            int maxFan = FanSensorControl.GetFanMax(device);
+            return minFan + (maxFan - minFan) * expectedPercent / 100;
+        }
+
+        private static int GetExpectedFanPercent(byte[] curve, int temperature)
+        {
             if (temperature <= curve[0])
                 return curve[8];
 
@@ -323,9 +342,17 @@ namespace GHelper.Mode
             return curve[15];
         }
 
-        private static bool IsFanDrift(int actualFan, int expectedFan)
+        private static bool IsFanDrift(AsusFan device, int actualFan, int expectedFan)
         {
-            return actualFan >= FanDriftHighFanThreshold && expectedFan >= 0 && actualFan >= expectedFan + FanDriftDeltaThreshold;
+            if (actualFan <= 0 || expectedFan < 0)
+                return false;
+
+            int minFan = FanSensorControl.GetFanMin(device);
+            int maxFan = FanSensorControl.GetFanMax(device);
+            int highThreshold = minFan + (maxFan - minFan) * FanDriftHighFanThreshold / 100;
+            int driftThreshold = Math.Max(3, (maxFan - minFan) * FanDriftDeltaThreshold / 100);
+
+            return actualFan >= highThreshold && actualFan >= expectedFan + driftThreshold;
         }
 
         private static void ResetActiveFanWatchdogCounters(bool keepRecoveryStage = false)
@@ -917,6 +944,7 @@ namespace GHelper.Mode
 
             var snapshot = CreateModeApplySnapshot(mode, oldMode);
 
+            ResetActiveFanWatchdogCounters();
             Task.Run(() => ApplyPerformanceModeAsync(snapshot));
             UpdateActiveFanWatchdogState("set-performance-mode");
 
