@@ -21,6 +21,13 @@ namespace GHelper.Mode
         private static int _screenOffFanKeepAliveEnabled = 0;
         private static int _screenOffFanKeepAliveReason = (int)Program.KeepAliveReason.None;
         private static int _screenOffFanReapplyRunning = 0;
+        private static int _activeFanWatchdogEnabled = 0;
+        private static int _activeFanWatchdogRunning = 0;
+        private static int _fanRecoveryRunning = 0;
+        private static int _cpuFanDriftHits = 0;
+        private static int _gpuFanDriftHits = 0;
+        private static int _fanRecoveryStage = 0;
+        private static long _lastSilentBounceRecovery = 0;
 
         private const int WakeReapplyDelayMs = 3000;
         private const int WakeReapplyCooldownMs = 10000;
@@ -28,10 +35,17 @@ namespace GHelper.Mode
         private const int ScreenOffFanInitialDelayMs = 3000;
         private const int FanRetryDelayMs = 250;
         private const int FanSelfHealDelayMs = 3000;
+        private const int ActiveFanWatchdogIntervalMs = 10_000;
+        private const int FanDriftHitThreshold = 3;
+        private const int FanDriftDeltaThreshold = 15;
+        private const int FanDriftHighFanThreshold = 45;
+        private const int SilentBounceCooldownMs = 5 * 60 * 1000;
+        private const int SilentBounceDelayMs = 1500;
 
         static System.Timers.Timer reapplyTimer = default!;
         static System.Timers.Timer modeToggleTimer = default!;
         static System.Timers.Timer screenOffFanKeepAliveTimer = default!;
+        static System.Timers.Timer activeFanWatchdogTimer = default!;
 
         private static readonly SemaphoreSlim modeApplySemaphore = new(1, 1);
         private static long modeApplySequence;
@@ -101,6 +115,32 @@ namespace GHelper.Mode
             public byte[] XgmFanCurve { get; init; } = [];
         }
 
+        private sealed class ActiveFanWatchdogSnapshot
+        {
+            public long SequenceId { get; init; }
+            public int Mode { get; init; }
+            public int ModeBase { get; init; }
+            public string ModeName { get; init; } = "";
+            public bool ManualModeRequired { get; init; }
+            public byte[] CpuFanCurve { get; init; } = [];
+            public byte[] GpuFanCurve { get; init; } = [];
+        }
+
+        private sealed class ActiveFanWatchdogSample
+        {
+            public long SequenceId { get; init; }
+            public int Mode { get; init; }
+            public int ModeBase { get; init; }
+            public string ModeName { get; init; } = "";
+            public bool ManualModeRequired { get; init; }
+            public int CpuTemp { get; init; }
+            public int GpuTemp { get; init; }
+            public int CpuFan { get; init; }
+            public int GpuFan { get; init; }
+            public int ExpectedCpuFan { get; init; }
+            public int ExpectedGpuFan { get; init; }
+        }
+
         public ModeControl()
         {
             reapplyTimer = new System.Timers.Timer(AppConfig.GetMode("reapply_time", 30) * 1000);
@@ -110,6 +150,10 @@ namespace GHelper.Mode
             screenOffFanKeepAliveTimer = new System.Timers.Timer(ScreenOffFanKeepAliveIntervalMs);
             screenOffFanKeepAliveTimer.Enabled = false;
             screenOffFanKeepAliveTimer.Elapsed += ScreenOffFanKeepAliveTimer_Elapsed;
+
+            activeFanWatchdogTimer = new System.Timers.Timer(ActiveFanWatchdogIntervalMs);
+            activeFanWatchdogTimer.Enabled = false;
+            activeFanWatchdogTimer.Elapsed += ActiveFanWatchdogTimer_Elapsed;
         }
 
 
@@ -117,6 +161,243 @@ namespace GHelper.Mode
         {
             SetCPUTemp(AppConfig.GetMode("cpu_temp"));
             SetRyzenPower();
+        }
+
+        private void ActiveFanWatchdogTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
+        {
+            if (Interlocked.CompareExchange(ref _activeFanWatchdogRunning, 1, 0) == 1)
+                return;
+
+            _ = RunActiveFanWatchdogAsync();
+        }
+
+        private async Task RunActiveFanWatchdogAsync()
+        {
+            try
+            {
+                ActiveFanWatchdogSnapshot? snapshot = CreateActiveFanWatchdogSnapshot();
+                if (snapshot is null)
+                {
+                    UpdateActiveFanWatchdogState("tick");
+                    return;
+                }
+
+                ActiveFanWatchdogSample sample = CaptureActiveFanWatchdogSample(snapshot);
+
+                bool cpuDrift = IsFanDrift(sample.CpuFan, sample.ExpectedCpuFan);
+                bool gpuDrift = IsFanDrift(sample.GpuFan, sample.ExpectedGpuFan);
+
+                int cpuHits = cpuDrift ? Interlocked.Increment(ref _cpuFanDriftHits) : Interlocked.Exchange(ref _cpuFanDriftHits, 0);
+                int gpuHits = gpuDrift ? Interlocked.Increment(ref _gpuFanDriftHits) : Interlocked.Exchange(ref _gpuFanDriftHits, 0);
+
+                if (!cpuDrift && !gpuDrift)
+                {
+                    if (cpuHits > 0 || gpuHits > 0 || Interlocked.CompareExchange(ref _fanRecoveryStage, 0, 0) > 0)
+                    {
+                        Logger.WriteLine($"fan-drift-cleared: mode={sample.Mode}, modeBase={sample.ModeBase}, manualRequired={sample.ManualModeRequired}, cpuTemp={sample.CpuTemp}, gpuTemp={sample.GpuTemp}, cpuFan={sample.CpuFan}, gpuFan={sample.GpuFan}, expectedCpu={sample.ExpectedCpuFan}, expectedGpu={sample.ExpectedGpuFan}, seq={sample.SequenceId}");
+                    }
+
+                    ResetActiveFanWatchdogCounters();
+                    return;
+                }
+
+                if (Math.Max(cpuHits, gpuHits) < FanDriftHitThreshold)
+                    return;
+
+                Logger.WriteLine($"fan-drift-detected: mode={sample.Mode}, modeBase={sample.ModeBase}, manualRequired={sample.ManualModeRequired}, cpuTemp={sample.CpuTemp}, gpuTemp={sample.GpuTemp}, cpuFan={sample.CpuFan}, gpuFan={sample.GpuFan}, expectedCpu={sample.ExpectedCpuFan}, expectedGpu={sample.ExpectedGpuFan}, seq={sample.SequenceId}, cpuHits={cpuHits}, gpuHits={gpuHits}");
+                ResetActiveFanWatchdogCounters(keepRecoveryStage: true);
+
+                int recoveryStage = Interlocked.CompareExchange(ref _fanRecoveryStage, 0, 0);
+                if (recoveryStage == 0)
+                {
+                    Interlocked.Exchange(ref _fanRecoveryStage, 1);
+                    await RunFanRecoveryAsync(silentBounce: false, sample);
+                    return;
+                }
+
+                long now = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                long lastSilentBounce = Interlocked.Read(ref _lastSilentBounceRecovery);
+                if (now - lastSilentBounce < SilentBounceCooldownMs)
+                {
+                    Logger.WriteLine($"fan-recovery-cooldown-skip: mode={sample.Mode}, modeBase={sample.ModeBase}, manualRequired={sample.ManualModeRequired}, cpuTemp={sample.CpuTemp}, gpuTemp={sample.GpuTemp}, cpuFan={sample.CpuFan}, gpuFan={sample.GpuFan}, expectedCpu={sample.ExpectedCpuFan}, expectedGpu={sample.ExpectedGpuFan}, seq={sample.SequenceId}");
+                    return;
+                }
+
+                Interlocked.Exchange(ref _fanRecoveryStage, 2);
+                Interlocked.Exchange(ref _lastSilentBounceRecovery, now);
+                await RunFanRecoveryAsync(silentBounce: true, sample);
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine("fan-watchdog-error: " + ex);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _activeFanWatchdogRunning, 0);
+            }
+        }
+
+        private static bool ShouldEnableActiveFanWatchdog()
+        {
+            if (!AppConfig.ContainsModel("GA402X"))
+                return false;
+
+            if (Interlocked.CompareExchange(ref _screenOffFanKeepAliveEnabled, 0, 0) == 1)
+                return false;
+
+            if (Interlocked.CompareExchange(ref _fanRecoveryRunning, 0, 0) == 1)
+                return false;
+
+            int currentMode = Modes.GetCurrent();
+            if (!AppConfig.IsMode("auto_apply", currentMode))
+                return false;
+
+            return AppConfig.GetFanConfig(AsusFan.CPU, currentMode).Length == 16
+                && AppConfig.GetFanConfig(AsusFan.GPU, currentMode).Length == 16;
+        }
+
+        private static ActiveFanWatchdogSnapshot? CreateActiveFanWatchdogSnapshot()
+        {
+            if (!ShouldEnableActiveFanWatchdog())
+                return null;
+
+            int currentMode = Modes.GetCurrent();
+            return new ActiveFanWatchdogSnapshot
+            {
+                SequenceId = Interlocked.Read(ref modeApplySequence),
+                Mode = currentMode,
+                ModeBase = Modes.GetBase(currentMode),
+                ModeName = Modes.GetName(currentMode),
+                ManualModeRequired = AppConfig.IsManualModeRequired(currentMode),
+                CpuFanCurve = CloneCurve(AppConfig.GetFanConfig(AsusFan.CPU, currentMode)),
+                GpuFanCurve = CloneCurve(AppConfig.GetFanConfig(AsusFan.GPU, currentMode)),
+            };
+        }
+
+        private static ActiveFanWatchdogSample CaptureActiveFanWatchdogSample(ActiveFanWatchdogSnapshot snapshot)
+        {
+            int cpuTemp = (int)Math.Round(HardwareControl.GetCPUTemp() ?? -1);
+            int gpuTemp = (int)Math.Round(HardwareControl.GetGPUTemp() ?? -1);
+
+            return new ActiveFanWatchdogSample
+            {
+                SequenceId = snapshot.SequenceId,
+                Mode = snapshot.Mode,
+                ModeBase = snapshot.ModeBase,
+                ModeName = snapshot.ModeName,
+                ManualModeRequired = snapshot.ManualModeRequired,
+                CpuTemp = cpuTemp,
+                GpuTemp = gpuTemp,
+                CpuFan = Program.acpi.GetFan(AsusFan.CPU),
+                GpuFan = Program.acpi.GetFan(AsusFan.GPU),
+                ExpectedCpuFan = GetExpectedFanFromCurve(snapshot.CpuFanCurve, cpuTemp),
+                ExpectedGpuFan = GetExpectedFanFromCurve(snapshot.GpuFanCurve, gpuTemp),
+            };
+        }
+
+        private static int GetExpectedFanFromCurve(byte[] curve, int temperature)
+        {
+            if (curve.Length != 16 || temperature < 0)
+                return -1;
+
+            if (temperature <= curve[0])
+                return curve[8];
+
+            for (int i = 1; i < 8; i++)
+            {
+                int currentTemp = curve[i];
+                if (temperature > currentTemp)
+                    continue;
+
+                int previousTemp = curve[i - 1];
+                int previousFan = curve[i + 7];
+                int currentFan = curve[i + 8];
+
+                if (currentTemp <= previousTemp)
+                    return currentFan;
+
+                double position = (double)(temperature - previousTemp) / (currentTemp - previousTemp);
+                return (int)Math.Round(previousFan + ((currentFan - previousFan) * position));
+            }
+
+            return curve[15];
+        }
+
+        private static bool IsFanDrift(int actualFan, int expectedFan)
+        {
+            return actualFan >= FanDriftHighFanThreshold && expectedFan >= 0 && actualFan >= expectedFan + FanDriftDeltaThreshold;
+        }
+
+        private static void ResetActiveFanWatchdogCounters(bool keepRecoveryStage = false)
+        {
+            Interlocked.Exchange(ref _cpuFanDriftHits, 0);
+            Interlocked.Exchange(ref _gpuFanDriftHits, 0);
+
+            if (!keepRecoveryStage)
+                Interlocked.Exchange(ref _fanRecoveryStage, 0);
+        }
+
+        private void StopActiveFanWatchdog(string reason, bool keepRecoveryStage = false)
+        {
+            bool wasEnabled = Interlocked.Exchange(ref _activeFanWatchdogEnabled, 0) == 1;
+            activeFanWatchdogTimer.Stop();
+
+            if (wasEnabled)
+            {
+                Logger.WriteLine($"fan-watchdog-stop: reason={reason}, mode={Modes.GetCurrent()}, seq={Interlocked.Read(ref modeApplySequence)}");
+            }
+
+            ResetActiveFanWatchdogCounters(keepRecoveryStage);
+        }
+
+        private void StartActiveFanWatchdog(string reason, bool keepRecoveryStage = false)
+        {
+            if (Interlocked.CompareExchange(ref _activeFanWatchdogEnabled, 1, 0) == 1)
+                return;
+
+            ResetActiveFanWatchdogCounters(keepRecoveryStage);
+            activeFanWatchdogTimer.Start();
+
+            int currentMode = Modes.GetCurrent();
+            Logger.WriteLine($"fan-watchdog-start: reason={reason}, mode={currentMode}, modeBase={Modes.GetBase(currentMode)}, manualRequired={AppConfig.IsManualModeRequired(currentMode)}, seq={Interlocked.Read(ref modeApplySequence)}");
+        }
+
+        private void UpdateActiveFanWatchdogState(string reason, bool keepRecoveryStage = false)
+        {
+            if (ShouldEnableActiveFanWatchdog())
+                StartActiveFanWatchdog(reason, keepRecoveryStage);
+            else
+                StopActiveFanWatchdog(reason, keepRecoveryStage);
+        }
+
+        private async Task RunFanRecoveryAsync(bool silentBounce, ActiveFanWatchdogSample sample)
+        {
+            if (Interlocked.CompareExchange(ref _fanRecoveryRunning, 1, 0) == 1)
+                return;
+
+            StopActiveFanWatchdog(silentBounce ? "silent-bounce-recovery" : "reapply-recovery", keepRecoveryStage: true);
+
+            try
+            {
+                int currentMode = Modes.GetCurrent();
+                var snapshot = CreateModeApplySnapshot(currentMode, currentMode);
+
+                if (silentBounce)
+                    Logger.WriteLine($"fan-recovery-silent-bounce: mode={sample.Mode}, modeBase={sample.ModeBase}, manualRequired={sample.ManualModeRequired}, cpuTemp={sample.CpuTemp}, gpuTemp={sample.GpuTemp}, cpuFan={sample.CpuFan}, gpuFan={sample.GpuFan}, expectedCpu={sample.ExpectedCpuFan}, expectedGpu={sample.ExpectedGpuFan}, seq={snapshot.SequenceId}");
+                else
+                    Logger.WriteLine($"fan-recovery-reapply: mode={sample.Mode}, modeBase={sample.ModeBase}, manualRequired={sample.ManualModeRequired}, cpuTemp={sample.CpuTemp}, gpuTemp={sample.GpuTemp}, cpuFan={sample.CpuFan}, gpuFan={sample.GpuFan}, expectedCpu={sample.ExpectedCpuFan}, expectedGpu={sample.ExpectedGpuFan}, seq={snapshot.SequenceId}");
+
+                await ApplyPerformanceModeAsync(snapshot, silentBounce, runModeCommand: false, source: silentBounce ? "fan-recovery-silent-bounce" : "fan-recovery-reapply");
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"fan-recovery-error: silentBounce={silentBounce}, error={ex}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _fanRecoveryRunning, 0);
+                UpdateActiveFanWatchdogState(silentBounce ? "silent-bounce-finished" : "reapply-finished", keepRecoveryStage: true);
+            }
         }
 
         private static (bool shouldApply, bool forceApply) GetScreenOffFanKeepAliveApplyState()
@@ -143,6 +424,8 @@ namespace GHelper.Mode
             {
                 Logger.WriteLine($"Screen-off fan keep-alive stopped: {reason}, keepAliveReason={keepAliveReason}");
             }
+
+            UpdateActiveFanWatchdogState($"screen-off-stop:{reason}");
 
             return wasEnabled ? keepAliveReason : Program.KeepAliveReason.None;
         }
@@ -244,6 +527,7 @@ namespace GHelper.Mode
 
                 Logger.WriteLine($"Screen-off fan keep-alive started: keepAliveReason={keepAliveReason}");
                 screenOffFanKeepAliveTimer.Start();
+                UpdateActiveFanWatchdogState($"screen-off-start:{keepAliveReason}");
 
                 Task.Run(async () =>
                 {
@@ -352,7 +636,7 @@ namespace GHelper.Mode
                 MidFanCurve = AppConfig.GetFanConfig(AsusFan.Mid, mode),
                 XgmFanCurve = AppConfig.GetFanConfig(AsusFan.XGM, mode),
                 ResetRequired = AppConfig.IsResetRequired() && (Modes.GetBase(oldMode) == Modes.GetBase(mode)) && customPower > 0 && !autoApplyPower,
-                ManualModeRequired = autoApplyPower && (AppConfig.Is("manual_mode") || AppConfig.ContainsModel("G733")),
+                ManualModeRequired = AppConfig.IsManualModeRequired(mode),
             };
         }
 
@@ -497,81 +781,98 @@ namespace GHelper.Mode
             Logger.WriteLine($"Fan apply skipped ({stage}): seq={snapshot.SequenceId}, source={snapshot.Source}, mode={snapshot.Mode}, keepAliveReason={snapshot.KeepAliveReason}, latestFan={Interlocked.Read(ref fanApplySequence)}, latestMode={Interlocked.Read(ref modeApplySequence)}");
         }
 
-        private async Task ApplyPerformanceModeAsync(ModeApplySnapshot snapshot)
+        private async Task ApplyPerformanceModeCoreAsync(ModeApplySnapshot snapshot, bool silentBounce, bool runModeCommand, string source)
+        {
+            if (!IsCurrentModeApply(snapshot.SequenceId))
+            {
+                LogSkippedModeApply(snapshot, "before-start");
+                return;
+            }
+
+            Logger.WriteLine($"Mode apply start: seq={snapshot.SequenceId}, source={source}, mode={snapshot.Mode}, base={snapshot.ModeBase}, manualRequired={snapshot.ManualModeRequired}, silentBounce={silentBounce}");
+
+            customFans = false;
+            customPower = 0;
+            customTemp = false;
+
+            SetModeLabel(snapshot);
+
+            if (snapshot.ResetRequired)
+            {
+                Program.acpi.DeviceSet(AsusACPI.PerformanceMode, snapshot.OldModeBase != 1 ? AsusACPI.PerformanceTurbo : AsusACPI.PerformanceBalanced, "ModeReset");
+                await Task.Delay(TimeSpan.FromMilliseconds(1500));
+
+                if (!IsCurrentModeApply(snapshot.SequenceId))
+                {
+                    LogSkippedModeApply(snapshot, "after-reset");
+                    return;
+                }
+            }
+
+            if (silentBounce)
+            {
+                Program.acpi.DeviceSet(AsusACPI.PerformanceMode, AsusACPI.PerformanceSilent, "ModeRecoverySilent");
+                await Task.Delay(TimeSpan.FromMilliseconds(SilentBounceDelayMs));
+
+                if (!IsCurrentModeApply(snapshot.SequenceId))
+                {
+                    LogSkippedModeApply(snapshot, "after-silent-bounce");
+                    return;
+                }
+            }
+
+            if (snapshot.StatusModeEnabled)
+                Program.acpi.DeviceSet(AsusACPI.StatusMode, [0x00, snapshot.ModeBase == AsusACPI.PerformanceSilent ? (byte)0x02 : (byte)0x03], "StatusMode");
+
+            int status = Program.acpi.DeviceSet(AsusACPI.PerformanceMode, snapshot.ManualModeRequired ? AsusACPI.PerformanceManual : snapshot.ModeBase, "Mode");
+            if (status != 1)
+                Program.acpi.SetVivoMode(snapshot.ModeBase);
+
+            if (!IsCurrentModeApply(snapshot.SequenceId))
+            {
+                LogSkippedModeApply(snapshot, "after-mode");
+                return;
+            }
+
+            ApplyGPUClocks(snapshot);
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+            if (!IsCurrentModeApply(snapshot.SequenceId))
+            {
+                LogSkippedModeApply(snapshot, "before-fans");
+                return;
+            }
+
+            AutoFans(snapshot, source: source);
+
+            await Task.Delay(TimeSpan.FromMilliseconds(1000));
+            if (!IsCurrentModeApply(snapshot.SequenceId))
+            {
+                LogSkippedModeApply(snapshot, "before-power");
+                return;
+            }
+
+            AutoPower(snapshot);
+
+            if (!IsCurrentModeApply(snapshot.SequenceId))
+            {
+                LogSkippedModeApply(snapshot, "after-power");
+                return;
+            }
+
+            if (runModeCommand && snapshot.ModeCommand is not null)
+            {
+                Logger.WriteLine("Running mode command: " + snapshot.ModeCommand);
+                RestrictedProcessHelper.RunAsRestrictedUser(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), "/C " + snapshot.ModeCommand);
+            }
+        }
+
+        private async Task ApplyPerformanceModeAsync(ModeApplySnapshot snapshot, bool silentBounce = false, bool runModeCommand = true, string source = "mode-apply")
         {
             await modeApplySemaphore.WaitAsync();
             try
             {
-                if (!IsCurrentModeApply(snapshot.SequenceId))
-                {
-                    LogSkippedModeApply(snapshot, "before-start");
-                    return;
-                }
-
-                Logger.WriteLine($"Mode apply start: seq={snapshot.SequenceId}, mode={snapshot.Mode}, base={snapshot.ModeBase}");
-
-                customFans = false;
-                customPower = 0;
-                customTemp = false;
-
-                SetModeLabel(snapshot);
-
-                if (snapshot.ResetRequired)
-                {
-                    Program.acpi.DeviceSet(AsusACPI.PerformanceMode, snapshot.OldModeBase != 1 ? AsusACPI.PerformanceTurbo : AsusACPI.PerformanceBalanced, "ModeReset");
-                    await Task.Delay(TimeSpan.FromMilliseconds(1500));
-
-                    if (!IsCurrentModeApply(snapshot.SequenceId))
-                    {
-                        LogSkippedModeApply(snapshot, "after-reset");
-                        return;
-                    }
-                }
-
-                if (snapshot.StatusModeEnabled)
-                    Program.acpi.DeviceSet(AsusACPI.StatusMode, [0x00, snapshot.ModeBase == AsusACPI.PerformanceSilent ? (byte)0x02 : (byte)0x03], "StatusMode");
-
-                int status = Program.acpi.DeviceSet(AsusACPI.PerformanceMode, snapshot.ManualModeRequired ? AsusACPI.PerformanceManual : snapshot.ModeBase, "Mode");
-                if (status != 1)
-                    Program.acpi.SetVivoMode(snapshot.ModeBase);
-
-                if (!IsCurrentModeApply(snapshot.SequenceId))
-                {
-                    LogSkippedModeApply(snapshot, "after-mode");
-                    return;
-                }
-
-                ApplyGPUClocks(snapshot);
-
-                await Task.Delay(TimeSpan.FromMilliseconds(100));
-                if (!IsCurrentModeApply(snapshot.SequenceId))
-                {
-                    LogSkippedModeApply(snapshot, "before-fans");
-                    return;
-                }
-
-                AutoFans(snapshot, source: "mode-apply");
-
-                await Task.Delay(TimeSpan.FromMilliseconds(1000));
-                if (!IsCurrentModeApply(snapshot.SequenceId))
-                {
-                    LogSkippedModeApply(snapshot, "before-power");
-                    return;
-                }
-
-                AutoPower(snapshot);
-
-                if (!IsCurrentModeApply(snapshot.SequenceId))
-                {
-                    LogSkippedModeApply(snapshot, "after-power");
-                    return;
-                }
-
-                if (snapshot.ModeCommand is not null)
-                {
-                    Logger.WriteLine("Running mode command: " + snapshot.ModeCommand);
-                    RestrictedProcessHelper.RunAsRestrictedUser(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), "/C " + snapshot.ModeCommand);
-                }
+                await ApplyPerformanceModeCoreAsync(snapshot, silentBounce, runModeCommand, source);
             }
             catch (Exception ex)
             {
@@ -580,6 +881,7 @@ namespace GHelper.Mode
             finally
             {
                 modeApplySemaphore.Release();
+                UpdateActiveFanWatchdogState($"mode-apply-finished:{source}", keepRecoveryStage: Interlocked.CompareExchange(ref _fanRecoveryRunning, 0, 0) == 1 || source.StartsWith("fan-recovery"));
             }
         }
 
@@ -593,6 +895,7 @@ namespace GHelper.Mode
             // Default power mode
             AppConfig.RemoveMode("powermode");
             PowerNative.SetPowerMode(Modes.GetCurrentBase());
+            UpdateActiveFanWatchdogState("reset-performance-mode");
         }
 
         public void Toast()
@@ -615,6 +918,7 @@ namespace GHelper.Mode
             var snapshot = CreateModeApplySnapshot(mode, oldMode);
 
             Task.Run(() => ApplyPerformanceModeAsync(snapshot));
+            UpdateActiveFanWatchdogState("set-performance-mode");
 
 
             if (AppConfig.Is("xgm_fan")) XGM.Reset();
@@ -696,6 +1000,7 @@ namespace GHelper.Mode
             finally
             {
                 modeApplySemaphore.Release();
+                UpdateActiveFanWatchdogState($"fan-apply-finished:{snapshot.Source}");
             }
         }
 

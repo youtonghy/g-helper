@@ -647,8 +647,18 @@ public static class AppConfig
 
     public static bool IsManualModeRequired()
     {
-        if (!IsMode("auto_apply_power")) return false;
-        return Is("manual_mode") || ContainsModel("G733");
+        return IsManualModeRequired(Modes.GetCurrent());
+    }
+
+    public static bool IsManualModeRequired(int mode)
+    {
+        bool powerManualRequired = IsMode("auto_apply_power", mode) && (Is("manual_mode") || ContainsModel("G733"));
+        return powerManualRequired || IsFanOnlyManualModeRequired(mode);
+    }
+
+    public static bool IsFanOnlyManualModeRequired(int mode)
+    {
+        return ContainsModel("GA402X") && IsMode("auto_apply", mode);
     }
 
     public static bool IsResetRequired()
