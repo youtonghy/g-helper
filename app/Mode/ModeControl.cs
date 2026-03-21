@@ -690,11 +690,12 @@ namespace GHelper.Mode
             string source,
             Program.KeepAliveReason keepAliveReason = Program.KeepAliveReason.None,
             bool allowSelfHeal = true,
-            long modeSequenceId = 0)
+            long modeSequenceId = 0,
+            long? sequenceId = null)
         {
             return new FanApplySnapshot
             {
-                SequenceId = Interlocked.Increment(ref fanApplySequence),
+                SequenceId = sequenceId ?? Interlocked.Increment(ref fanApplySequence),
                 ModeSequenceId = modeSequenceId,
                 Mode = mode,
                 ModeBase = modeBase,
@@ -766,7 +767,7 @@ namespace GHelper.Mode
                 Interlocked.Read(ref modeApplySequence));
         }
 
-        private static FanApplySnapshot CloneFanApplySnapshot(FanApplySnapshot snapshot, string source, bool allowSelfHeal)
+        private static FanApplySnapshot CloneFanApplySnapshot(FanApplySnapshot snapshot, string source, bool allowSelfHeal, bool preserveSequenceId = false)
         {
             return CreateFanApplySnapshot(
                 snapshot.Mode,
@@ -786,7 +787,8 @@ namespace GHelper.Mode
                 source,
                 snapshot.KeepAliveReason,
                 allowSelfHeal,
-                snapshot.ModeSequenceId);
+                snapshot.ModeSequenceId,
+                preserveSequenceId ? snapshot.SequenceId : null);
         }
 
         private static bool IsCurrentFanApply(FanApplySnapshot snapshot)
@@ -1139,7 +1141,14 @@ namespace GHelper.Mode
             Task.Run(async () =>
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(FanSelfHealDelayMs));
-                FanApplySnapshot retrySnapshot = CloneFanApplySnapshot(snapshot, $"{snapshot.Source}-self-heal", false);
+
+                if (!IsCurrentFanApply(snapshot))
+                {
+                    Logger.WriteLine($"Fan curve self-heal skipped: source={snapshot.Source}, seq={snapshot.SequenceId}, keepAliveReason={snapshot.KeepAliveReason}, latestFan={Interlocked.Read(ref fanApplySequence)}, latestMode={Interlocked.Read(ref modeApplySequence)}");
+                    return;
+                }
+
+                FanApplySnapshot retrySnapshot = CloneFanApplySnapshot(snapshot, $"{snapshot.Source}-self-heal", false, true);
                 await ApplyStandaloneFanSnapshotAsync(retrySnapshot);
             });
         }
