@@ -42,6 +42,18 @@ namespace GHelper.UI
             }
         }
 
+        private bool dragHighlighted = false;
+        public bool DragHighlighted
+        {
+            get { return dragHighlighted; }
+            set
+            {
+                if (dragHighlighted != value)
+                    Invalidate();
+                dragHighlighted = value;
+            }
+        }
+
         private bool secondary = false;
         public bool Secondary
         {
@@ -85,7 +97,9 @@ namespace GHelper.UI
             Rectangle rectSurface = ClientRectangle;
             Rectangle rectBorder = Rectangle.Inflate(rectSurface, -border, -border);
 
-            Color borderDrawColor = activated ? borderColor : Color.Transparent;
+            Color borderDrawColor = activated || dragHighlighted
+                ? (borderColor == Color.Transparent ? SystemColors.Highlight : borderColor)
+                : Color.Transparent;
 
             using (GraphicsPath pathSurface = GetFigurePath(rectSurface, borderRadius + border))
             using (GraphicsPath pathBorder = GetFigurePath(rectBorder, borderRadius))

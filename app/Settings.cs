@@ -53,10 +53,20 @@ namespace GHelper
 
         const int performanceModeColumns = 4;
         readonly Dictionary<int, RButton> performanceModeButtons = new();
+        readonly Dictionary<string, RButton> performanceTileButtons = new();
         readonly List<RButton> customModeButtons = new();
+        Point performanceDragStart = Point.Empty;
+        RButton? performanceDragSourceButton;
+        string? performanceDropTargetTileKey;
 
         RButton buttonAway = new RButton();
         RButton buttonHome = new RButton();
+
+        sealed class PerformanceTileDropInfo
+        {
+            public required string TileKey { get; init; }
+            public required bool InsertAfter { get; init; }
+        }
 
         public SettingsForm()
         {
@@ -306,6 +316,12 @@ namespace GHelper
 
             buttonDonate.Click += ButtonDonate_Click;
 
+            tablePerf.AllowDrop = true;
+            tablePerf.DragEnter += TablePerf_DragEnter;
+            tablePerf.DragOver += TablePerf_DragOver;
+            tablePerf.DragLeave += TablePerf_DragLeave;
+            tablePerf.DragDrop += TablePerf_DragDrop;
+
             int click = AppConfig.Get("donate_click");
             int startCount = AppConfig.Get("start_count");
             if (startCount >= ((click < 10) ? 10 : click + 50))
@@ -342,6 +358,7 @@ namespace GHelper
         {
             tablePerf.SuspendLayout();
             SuspendLayout();
+            ResetPerformanceDragState();
 
             foreach (var button in customModeButtons)
             {
@@ -351,6 +368,7 @@ namespace GHelper
             customModeButtons.Clear();
 
             performanceModeButtons.Clear();
+            performanceTileButtons.Clear();
             tablePerf.Controls.Clear();
             tablePerf.ColumnStyles.Clear();
             tablePerf.RowStyles.Clear();
@@ -361,8 +379,8 @@ namespace GHelper
                 tablePerf.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / performanceModeColumns));
             }
 
-            var modeOrder = GetOrderedPerformanceModes();
-            int totalButtons = modeOrder.Count + 1; // + Fans + Power
+            var tileOrder = Modes.GetPerformanceTileOrder();
+            int totalButtons = tileOrder.Count;
             int rowCount = Math.Max(1, (int)Math.Ceiling((double)totalButtons / performanceModeColumns));
             tablePerf.RowCount = rowCount;
 
@@ -372,46 +390,32 @@ namespace GHelper
             }
 
             int index = 0;
-            foreach (int mode in modeOrder)
+            foreach (string tileKey in tileOrder)
             {
-                var modeButton = GetModeButton(mode);
-                modeButton.Text = Modes.GetName(mode);
-                modeButton.AccessibleName = Modes.GetName(mode);
+                RButton tileButton = GetPerformanceTileButton(tileKey);
+                ConfigurePerformanceTileButton(tileButton, tileKey);
 
-                tablePerf.Controls.Add(modeButton, index % performanceModeColumns, index / performanceModeColumns);
-                performanceModeButtons[mode] = modeButton;
+                if (Modes.TryGetModeFromTileKey(tileKey, out int mode))
+                {
+                    tileButton.Text = Modes.GetName(mode);
+                    tileButton.AccessibleName = Modes.GetName(mode);
+                    performanceModeButtons[mode] = tileButton;
+                }
+                else
+                {
+                    tileButton.Text = Properties.Strings.FansPower;
+                    tileButton.AccessibleName = Properties.Strings.FansAndPower;
+                    tileButton.Activated = false;
+                    tileButton.BorderColor = colorCustom;
+                }
+
+                tablePerf.Controls.Add(tileButton, index % performanceModeColumns, index / performanceModeColumns);
+                performanceTileButtons[tileKey] = tileButton;
                 index++;
             }
 
-            buttonFans.Text = Properties.Strings.FansPower;
-            buttonFans.AccessibleName = Properties.Strings.FansAndPower;
-            buttonFans.Activated = false;
-            buttonFans.BorderColor = colorCustom;
-            tablePerf.Controls.Add(buttonFans, index % performanceModeColumns, index / performanceModeColumns);
-
             tablePerf.ResumeLayout();
             ResumeLayout();
-        }
-
-        private List<int> GetOrderedPerformanceModes()
-        {
-            List<int> modes = new();
-
-            if (Modes.Exists(AsusACPI.PerformanceSilent))
-                modes.Add(AsusACPI.PerformanceSilent);
-            if (Modes.Exists(AsusACPI.PerformanceBalanced))
-                modes.Add(AsusACPI.PerformanceBalanced);
-            if (Modes.Exists(AsusACPI.PerformanceTurbo))
-                modes.Add(AsusACPI.PerformanceTurbo);
-
-            var customModes = Modes.GetDictonary()
-                .Keys
-                .Where(mode => mode > AsusACPI.PerformanceSilent)
-                .OrderBy(mode => mode);
-
-            modes.AddRange(customModes);
-
-            return modes;
         }
 
         private RButton GetModeButton(int mode)
@@ -448,6 +452,28 @@ namespace GHelper
             }
         }
 
+        private RButton GetPerformanceTileButton(string tileKey)
+        {
+            if (string.Equals(tileKey, Modes.FansTileKey, StringComparison.Ordinal))
+                return buttonFans;
+
+            return Modes.TryGetModeFromTileKey(tileKey, out int mode)
+                ? GetModeButton(mode)
+                : buttonFans;
+        }
+
+        private void ConfigurePerformanceTileButton(RButton button, string tileKey)
+        {
+            button.Tag = tileKey;
+            button.DragHighlighted = false;
+            button.MouseDown -= PerformanceTileButton_MouseDown;
+            button.MouseMove -= PerformanceTileButton_MouseMove;
+            button.MouseUp -= PerformanceTileButton_MouseUp;
+            button.MouseDown += PerformanceTileButton_MouseDown;
+            button.MouseMove += PerformanceTileButton_MouseMove;
+            button.MouseUp += PerformanceTileButton_MouseUp;
+        }
+
         private Color GetModeColor(int mode)
         {
             return Modes.GetBase(mode) switch
@@ -471,6 +497,249 @@ namespace GHelper
             {
                 currentModeButton.Activated = true;
             }
+        }
+
+        private void PerformanceTileButton_MouseDown(object? sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left || sender is not RButton button || button.Tag is not string)
+                return;
+
+            performanceDragSourceButton = button;
+            performanceDragStart = e.Location;
+        }
+
+        private void PerformanceTileButton_MouseMove(object? sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left || sender is not RButton button || performanceDragSourceButton != button)
+                return;
+
+            if (!HasExceededDragThreshold(e.Location) || button.Tag is not string tileKey || !performanceTileButtons.ContainsKey(tileKey))
+                return;
+
+            try
+            {
+                button.DoDragDrop(tileKey, DragDropEffects.Move);
+            }
+            finally
+            {
+                ResetPerformanceDragState();
+            }
+        }
+
+        private void PerformanceTileButton_MouseUp(object? sender, MouseEventArgs e)
+        {
+            ResetPerformanceDragSource();
+        }
+
+        private bool HasExceededDragThreshold(Point currentPoint)
+        {
+            Size dragSize = SystemInformation.DragSize;
+            Rectangle dragRectangle = new(
+                performanceDragStart.X - dragSize.Width / 2,
+                performanceDragStart.Y - dragSize.Height / 2,
+                dragSize.Width,
+                dragSize.Height);
+
+            return !dragRectangle.Contains(currentPoint);
+        }
+
+        private void TablePerf_DragEnter(object? sender, DragEventArgs e)
+        {
+            e.Effect = TryGetDraggedPerformanceTileKey(e.Data, out _) ? DragDropEffects.Move : DragDropEffects.None;
+        }
+
+        private void TablePerf_DragOver(object? sender, DragEventArgs e)
+        {
+            if (!TryGetDraggedPerformanceTileKey(e.Data, out string tileKey) || !performanceTileButtons.ContainsKey(tileKey))
+            {
+                e.Effect = DragDropEffects.None;
+                ClearPerformanceDropHighlight();
+                return;
+            }
+
+            PerformanceTileDropInfo? dropInfo = GetPerformanceTileDropInfo(tablePerf.PointToClient(new Point(e.X, e.Y)));
+            if (dropInfo is null)
+            {
+                e.Effect = DragDropEffects.None;
+                ClearPerformanceDropHighlight();
+                return;
+            }
+
+            e.Effect = DragDropEffects.Move;
+            UpdatePerformanceDropHighlight(dropInfo);
+        }
+
+        private void TablePerf_DragLeave(object? sender, EventArgs e)
+        {
+            ClearPerformanceDropHighlight();
+        }
+
+        private void TablePerf_DragDrop(object? sender, DragEventArgs e)
+        {
+            try
+            {
+                if (!TryGetDraggedPerformanceTileKey(e.Data, out string sourceTileKey))
+                    return;
+
+                PerformanceTileDropInfo? dropInfo = GetPerformanceTileDropInfo(tablePerf.PointToClient(new Point(e.X, e.Y)));
+                if (dropInfo is null)
+                    return;
+
+                ReorderPerformanceTile(sourceTileKey, dropInfo);
+            }
+            finally
+            {
+                ResetPerformanceDragState();
+            }
+        }
+
+        private bool TryGetDraggedPerformanceTileKey(IDataObject? dataObject, out string tileKey)
+        {
+            tileKey = "";
+            if (dataObject is null || !dataObject.GetDataPresent(typeof(string)))
+                return false;
+
+            string? value = dataObject.GetData(typeof(string)) as string;
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            tileKey = value;
+            return true;
+        }
+
+        private PerformanceTileDropInfo? GetPerformanceTileDropInfo(Point point)
+        {
+            List<string> tileOrder = Modes.GetPerformanceTileOrder();
+            if (tileOrder.Count == 0)
+                return null;
+
+            int column = GetTableLayoutIndex(point.X, tablePerf.GetColumnWidths());
+            int row = GetTableLayoutIndex(point.Y, tablePerf.GetRowHeights());
+            int tileIndex = row * performanceModeColumns + column;
+
+            if (tileIndex >= tileOrder.Count)
+            {
+                return new PerformanceTileDropInfo { TileKey = tileOrder[^1], InsertAfter = true };
+            }
+
+            Rectangle cellBounds = GetTableCellBounds(column, row);
+            bool insertAfter = point.X >= cellBounds.Left + cellBounds.Width / 2;
+            return new PerformanceTileDropInfo { TileKey = tileOrder[tileIndex], InsertAfter = insertAfter };
+        }
+
+        private Rectangle GetTableCellBounds(int column, int row)
+        {
+            int[] columnWidths = tablePerf.GetColumnWidths();
+            int[] rowHeights = tablePerf.GetRowHeights();
+            int x = 0;
+            int y = 0;
+
+            for (int i = 0; i < column && i < columnWidths.Length; i++)
+                x += columnWidths[i];
+            for (int i = 0; i < row && i < rowHeights.Length; i++)
+                y += rowHeights[i];
+
+            int width = column < columnWidths.Length ? columnWidths[column] : 0;
+            int height = row < rowHeights.Length ? rowHeights[row] : 0;
+
+            return new Rectangle(x, y, width, height);
+        }
+
+        private static int GetTableLayoutIndex(int coordinate, int[] sizes)
+        {
+            if (sizes.Length == 0)
+                return 0;
+
+            if (coordinate <= 0)
+                return 0;
+
+            int offset = 0;
+            for (int i = 0; i < sizes.Length; i++)
+            {
+                offset += sizes[i];
+                if (coordinate < offset)
+                    return i;
+            }
+
+            return sizes.Length - 1;
+        }
+
+        private void UpdatePerformanceDropHighlight(PerformanceTileDropInfo dropInfo)
+        {
+            if (performanceDropTargetTileKey == dropInfo.TileKey && performanceTileButtons.TryGetValue(dropInfo.TileKey, out var currentButton) && currentButton.DragHighlighted)
+                return;
+
+            ClearPerformanceDropHighlight();
+            performanceDropTargetTileKey = dropInfo.TileKey;
+
+            if (performanceTileButtons.TryGetValue(dropInfo.TileKey, out var button))
+                button.DragHighlighted = true;
+        }
+
+        private void ClearPerformanceDropHighlight()
+        {
+            if (!string.IsNullOrEmpty(performanceDropTargetTileKey) && performanceTileButtons.TryGetValue(performanceDropTargetTileKey, out var button))
+            {
+                button.DragHighlighted = false;
+            }
+
+            performanceDropTargetTileKey = null;
+        }
+
+        private void ResetPerformanceDragSource()
+        {
+            performanceDragSourceButton = null;
+            performanceDragStart = Point.Empty;
+        }
+
+        private void ResetPerformanceDragState()
+        {
+            ResetPerformanceDragSource();
+            ClearPerformanceDropHighlight();
+        }
+
+        private void ReorderPerformanceTile(string sourceTileKey, PerformanceTileDropInfo dropInfo)
+        {
+            if (string.Equals(sourceTileKey, dropInfo.TileKey, StringComparison.Ordinal))
+                return;
+
+            List<string> tileOrder = Modes.GetPerformanceTileOrder();
+            List<string> originalOrder = new(tileOrder);
+
+            int sourceIndex = tileOrder.IndexOf(sourceTileKey);
+            int targetIndex = tileOrder.IndexOf(dropInfo.TileKey);
+
+            if (sourceIndex < 0 || targetIndex < 0)
+                return;
+
+            tileOrder.RemoveAt(sourceIndex);
+            if (sourceIndex < targetIndex)
+                targetIndex--;
+
+            if (dropInfo.InsertAfter)
+                targetIndex++;
+
+            targetIndex = Math.Clamp(targetIndex, 0, tileOrder.Count);
+            tileOrder.Insert(targetIndex, sourceTileKey);
+
+            if (tileOrder.SequenceEqual(originalOrder))
+                return;
+
+            Modes.SetPerformanceTileOrder(tileOrder);
+            RefreshPerformanceModesUI();
+            SetContextMenu();
+            RefreshFansModeOrder();
+        }
+
+        private void RefreshFansModeOrder()
+        {
+            if (fansForm == null || fansForm.IsDisposed || fansForm.Text == "")
+                return;
+
+            if (fansForm.InvokeRequired)
+                fansForm.BeginInvoke(new Action(fansForm.RefreshModesPreserveSelection));
+            else
+                fansForm.RefreshModesPreserveSelection();
         }
 
         private static string GetLocalized(string key, string fallback)

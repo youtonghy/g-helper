@@ -513,6 +513,14 @@ namespace GHelper
             if (contextMenu) Program.settingsForm.SetContextMenu();
         }
 
+        public void RefreshModesPreserveSelection()
+        {
+            int mode = Modes.GetCurrent();
+            FillModes(false);
+            comboModes.SelectedValue = mode;
+            buttonRename.Visible = buttonRemove.Visible = Modes.IsCurrentCustom();
+        }
+
         private void ButtonAdd_Click(object? sender, EventArgs e)
         {
             int mode = Modes.Add();

@@ -2,6 +2,11 @@
 {
     internal class Modes
     {
+        public const string FansTileKey = "fans";
+
+        private const string PerformanceTilesOrderKey = "performance_tiles_order";
+        private const string ModeTilePrefix = "mode:";
+
         static Dictionary<string, string> settings = new Dictionary<string, string>
         {
             { "mode_base", "_" },
@@ -13,7 +18,7 @@
             { "limit_cpu", "int" },
             { "fan_profile_cpu", "string" },
             { "fan_profile_gpu", "string" },
-            { "fan_profile_mid", "string" }, 
+            { "fan_profile_mid", "string" },
             { "gpu_power", "int" },
             { "gpu_boost", "int" },
             { "gpu_temp", "int" },
@@ -33,16 +38,10 @@
 
         public static Dictionary<int, string> GetDictonary()
         {
-            Dictionary<int, string> modes = new Dictionary<int, string>
+            Dictionary<int, string> modes = new();
+            foreach (int mode in GetOrderedModes())
             {
-              {2, Properties.Strings.Silent},
-              {0, Properties.Strings.Balanced},
-              {1, Properties.Strings.Turbo}
-            };
-
-            for (int i = 3; i < maxModes; i++)
-            {
-                if (Exists(i)) modes.Add(i, GetName(i));
+                modes[mode] = GetName(mode);
             }
 
             return modes;
@@ -50,13 +49,7 @@
 
         public static List<int> GetList()
         {
-            List<int> modes = new() { 2, 0, 1 };
-            for (int i = 3; i < maxModes; i++)
-            {
-                if (Exists(i)) modes.Add(i);
-            }
-
-            return modes;
+            return GetOrderedModes();
         }
 
         public static void Remove(int mode)
@@ -156,10 +149,123 @@
             }
         }
 
+        public static string GetTileKey(int mode)
+        {
+            return ModeTilePrefix + mode;
+        }
+
+        public static bool TryGetModeFromTileKey(string? tileKey, out int mode)
+        {
+            mode = -1;
+            if (string.IsNullOrWhiteSpace(tileKey) || !tileKey.StartsWith(ModeTilePrefix, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return int.TryParse(tileKey.Substring(ModeTilePrefix.Length), out mode) && Exists(mode);
+        }
+
+        public static List<string> GetPerformanceTileOrder()
+        {
+            string rawOrder = AppConfig.GetString(PerformanceTilesOrderKey, "");
+            List<string> normalized = NormalizePerformanceTileOrder(ParseTileOrder(rawOrder));
+            string normalizedOrder = string.Join(",", normalized);
+
+            if (!string.Equals(rawOrder, normalizedOrder, StringComparison.Ordinal))
+            {
+                AppConfig.Set(PerformanceTilesOrderKey, normalizedOrder);
+            }
+
+            return normalized;
+        }
+
+        public static void SetPerformanceTileOrder(IEnumerable<string> tileOrder)
+        {
+            List<string> normalized = NormalizePerformanceTileOrder(tileOrder);
+            AppConfig.Set(PerformanceTilesOrderKey, string.Join(",", normalized));
+        }
+
+        public static List<int> GetOrderedModes()
+        {
+            List<int> modes = new();
+
+            foreach (string tileKey in GetPerformanceTileOrder())
+            {
+                if (TryGetModeFromTileKey(tileKey, out int mode))
+                    modes.Add(mode);
+            }
+
+            return modes;
+        }
+
+        private static List<string> ParseTileOrder(string? rawOrder)
+        {
+            if (string.IsNullOrWhiteSpace(rawOrder))
+                return new List<string>();
+
+            return rawOrder
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+        }
+
+        private static List<string> NormalizePerformanceTileOrder(IEnumerable<string> tileOrder)
+        {
+            List<int> availableModes = GetDefaultModeList();
+            HashSet<int> availableModeSet = availableModes.ToHashSet();
+            HashSet<int> addedModes = new();
+            List<string> normalized = new();
+            bool fansAdded = false;
+
+            foreach (string rawTileKey in tileOrder)
+            {
+                if (TryGetModeFromTileKey(rawTileKey, out int mode))
+                {
+                    if (availableModeSet.Contains(mode) && addedModes.Add(mode))
+                        normalized.Add(GetTileKey(mode));
+
+                    continue;
+                }
+
+                if (!fansAdded && string.Equals(rawTileKey, FansTileKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    normalized.Add(FansTileKey);
+                    fansAdded = true;
+                }
+            }
+
+            foreach (int mode in availableModes)
+            {
+                if (addedModes.Add(mode))
+                    normalized.Add(GetTileKey(mode));
+            }
+
+            if (!fansAdded)
+                normalized.Add(FansTileKey);
+
+            return normalized;
+        }
+
+        private static List<int> GetDefaultModeList()
+        {
+            List<int> modes = new();
+
+            if (Exists(AsusACPI.PerformanceSilent))
+                modes.Add(AsusACPI.PerformanceSilent);
+            if (Exists(AsusACPI.PerformanceBalanced))
+                modes.Add(AsusACPI.PerformanceBalanced);
+            if (Exists(AsusACPI.PerformanceTurbo))
+                modes.Add(AsusACPI.PerformanceTurbo);
+
+            for (int i = 3; i < maxModes; i++)
+            {
+                if (Exists(i))
+                    modes.Add(i);
+            }
+
+            return modes;
+        }
 
         public static int GetNext(bool back = false)
         {
-            var modes = GetList();
+            var modes = GetOrderedModes();
             int index = modes.IndexOf(GetCurrent());
 
             if (back)
