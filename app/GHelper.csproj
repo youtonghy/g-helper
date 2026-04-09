@@ -16,6 +16,12 @@
     <ProduceReferenceAssembly>False</ProduceReferenceAssembly>
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
     <AssemblyVersion>0.243</AssemblyVersion>
+    <DefaultGitHubRepository>youtonghy/g-helper</DefaultGitHubRepository>
+    <GitConfigPath>$(MSBuildProjectDirectory)\..\.git\config</GitConfigPath>
+    <GitHubRepositoryFromOrigin Condition="'$(GitHubRepositoryFromOrigin)' == '' and Exists('$(GitConfigPath)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(GitConfigPath)')), '(?ms)^\[remote "origin"\]\s+url = (?:git@github\.com:|https://github\.com/)([^ \r\n]+?)(?:\.git)?\s*$').Groups[1].Value)</GitHubRepositoryFromOrigin>
+    <GitHubRepository Condition="'$(GitHubRepository)' == '' and '$(GITHUB_REPOSITORY)' != ''">$(GITHUB_REPOSITORY)</GitHubRepository>
+    <GitHubRepository Condition="'$(GitHubRepository)' == '' and '$(GitHubRepositoryFromOrigin)' != ''">$(GitHubRepositoryFromOrigin)</GitHubRepository>
+    <GitHubRepository Condition="'$(GitHubRepository)' == ''">$(DefaultGitHubRepository)</GitHubRepository>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -35,6 +41,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>GitHubRepository</_Parameter1>
+      <_Parameter2>$(GitHubRepository)</_Parameter2>
+    </AssemblyAttribute>
     <Compile Remove="screenshots\**" />
     <EmbeddedResource Remove="screenshots\**" />
     <None Remove="screenshots\**" />

@@ -13,7 +13,7 @@ namespace GHelper.AutoUpdate
 
         SettingsForm settings;
 
-        public string versionUrl = "https://github.com/seerge/g-helper/releases";
+        public string versionUrl = GitHubReleaseSource.ReleasesPageUrl;
         public bool update = false;
 
         static long lastUpdate;
@@ -75,7 +75,8 @@ namespace GHelper.AutoUpdate
                 using (var httpClient = new HttpClient())
                 {
                     httpClient.DefaultRequestHeaders.Add("User-Agent", "G-Helper App");
-                    var json = await httpClient.GetStringAsync("https://api.github.com/repos/seerge/g-helper/releases/latest");
+                    Logger.WriteLine($"Checking updates from {GitHubReleaseSource.LatestReleaseApiUrl}");
+                    var json = await httpClient.GetStringAsync(GitHubReleaseSource.LatestReleaseApiUrl);
                     var config = JsonSerializer.Deserialize<JsonElement>(json);
                     var tag = config.GetProperty("tag_name").ToString().Replace("v", "");
                     var assets = config.GetProperty("assets");
@@ -84,12 +85,28 @@ namespace GHelper.AutoUpdate
 
                     for (int i = 0; i < assets.GetArrayLength(); i++)
                     {
-                        if (assets[i].GetProperty("browser_download_url").ToString().Contains(".zip"))
-                            url = assets[i].GetProperty("browser_download_url").ToString();
+                        var candidateUrl = assets[i].GetProperty("browser_download_url").ToString();
+                        if (!GitHubReleaseSource.IsReleaseAssetUrl(candidateUrl))
+                        {
+                            Logger.WriteLine($"Ignoring asset outside configured repository: {candidateUrl}");
+                            continue;
+                        }
+
+                        Logger.WriteLine($"Found release asset: {candidateUrl}");
+                        if (candidateUrl.Contains(".zip"))
+                        {
+                            url = candidateUrl;
+                            break;
+                        }
+
+                        url ??= candidateUrl;
                     }
 
                     if (url is null)
-                        url = assets[0].GetProperty("browser_download_url").ToString();
+                    {
+                        Logger.WriteLine($"No valid release assets found in {GitHubReleaseSource.Repository}");
+                        return;
+                    }
 
                     var gitVersion = new Version(tag);
                     var appVersion = new Version(Assembly.GetExecutingAssembly().GetName().Version.ToString());
