@@ -117,6 +117,7 @@ namespace GHelper
             checkTopmost = new CheckBox();
             checkNoOverdrive = new CheckBox();
             checkBootSound = new CheckBox();
+            checkKeystoneSound = new CheckBox();
             checkUSBC = new CheckBox();
             checkGpuApps = new CheckBox();
             checkGPUFix = new CheckBox();
@@ -1213,6 +1214,7 @@ namespace GHelper
             panelSettings.Controls.Add(checkBWIcon);
             panelSettings.Controls.Add(checkTopmost);
             panelSettings.Controls.Add(checkNoOverdrive);
+            panelSettings.Controls.Add(checkKeystoneSound);
             panelSettings.Controls.Add(checkBootSound);
             panelSettings.Controls.Add(checkUSBC);
             panelSettings.Controls.Add(checkGpuApps);
@@ -1291,6 +1293,20 @@ namespace GHelper
             checkBootSound.TabIndex = 10;
             checkBootSound.Text = "Boot Sound";
             checkBootSound.UseVisualStyleBackColor = true;
+            //
+            // checkKeystoneSound
+            //
+            checkKeystoneSound.AutoSize = true;
+            checkKeystoneSound.Dock = DockStyle.Top;
+            checkKeystoneSound.Location = new Point(21, 299);
+            checkKeystoneSound.Margin = new Padding(5, 3, 5, 3);
+            checkKeystoneSound.Name = "checkKeystoneSound";
+            checkKeystoneSound.Padding = new Padding(3);
+            checkKeystoneSound.Size = new Size(917, 42);
+            checkKeystoneSound.TabIndex = 16;
+            checkKeystoneSound.Text = "Keystone Sound";
+            checkKeystoneSound.UseVisualStyleBackColor = true;
+            checkKeystoneSound.Visible = false;
             // 
             // checkUSBC
             // 
@@ -1860,6 +1876,7 @@ namespace GHelper
         private CheckBox checkGPUFix;
         private ToolTip toolTip;
         private CheckBox checkBootSound;
+        private CheckBox checkKeystoneSound;
         private Panel panelAPU;
         private PictureBox pictureAPUMem;
         private Label labelAPUMem;

@@ -1468,5 +1468,11 @@ namespace GHelper.Mode
             Program.acpi.DeviceSet(AsusACPI.PerformanceMode,AsusACPI.PerformanceBalanced, "Mode Reset");
         }
 
+        public void SleepReset()
+        {
+            if (!AppConfig.IsSleepReset()) return;
+            Program.acpi.DeviceSet(AsusACPI.PerformanceMode, Modes.GetCurrentBase(), "Sleep Reset");
+        }
+
     }
 }
