@@ -15,7 +15,12 @@
     <PlatformTarget>AnyCPU</PlatformTarget>
     <ProduceReferenceAssembly>False</ProduceReferenceAssembly>
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
-    <AssemblyVersion>0.243</AssemblyVersion>
+    <DefaultAppVersion>0.243</DefaultAppVersion>
+    <Version Condition="'$(Version)' == ''">$(DefaultAppVersion)</Version>
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">$(Version)</AssemblyVersion>
+    <FileVersion Condition="'$(FileVersion)' == ''">$(Version)</FileVersion>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <DefaultGitHubRepository>youtonghy/g-helper</DefaultGitHubRepository>
     <GitConfigPath>$(MSBuildProjectDirectory)\..\.git\config</GitConfigPath>
     <GitHubRepositoryFromOrigin Condition="'$(GitHubRepositoryFromOrigin)' == '' and Exists('$(GitConfigPath)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(GitConfigPath)')), '(?ms)^\[remote "origin"\]\s+url = (?:git@github\.com:|https://github\.com/)([^ \r\n]+?)(?:\.git)?\s*$').Groups[1].Value)</GitHubRepositoryFromOrigin>

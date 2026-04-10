@@ -4,6 +4,11 @@ on:
   release:
     types: [ published ]
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Git tag to publish when running manually (for example: v1.2.3)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,6 +18,8 @@ permissions:
 jobs:
   release:
     runs-on: windows-2022
+    env:
+      TAG_NAME: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag_name }}
     steps:
     - uses: actions/checkout@v4
     - name: Setup dotnet
@@ -20,9 +27,19 @@ jobs:
       with:
         dotnet-version: '8.0.x'
 
+    - name: Normalize version from tag
+      shell: pwsh
+      run: |
+        $appVersion = $env:TAG_NAME -replace '^v', ''
+        if ([string]::IsNullOrWhiteSpace($appVersion)) {
+          throw "Unable to derive app version from tag '$env:TAG_NAME'"
+        }
+
+        "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
     - name: Publish
       run: |
-        dotnet publish app/GHelper.sln --configuration Release --runtime win-x64 -p:PublishSingleFile=true --no-self-contained
+        dotnet publish app/GHelper.sln --configuration Release --runtime win-x64 -p:PublishSingleFile=true --no-self-contained -p:Version=${{ env.APP_VERSION }} -p:AssemblyVersion=${{ env.APP_VERSION }} -p:FileVersion=${{ env.APP_VERSION }} -p:InformationalVersion=${{ env.APP_VERSION }} -p:SourceRevisionId=
 
     - name: Upload unsigned EXE
       id: upload-unsigned
@@ -48,7 +65,7 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        gh release upload "${{ github.event.release.tag_name }}" ./signed/GHelper.exe ./signed/GHelper.zip --clobber
+        gh release upload "${{ env.TAG_NAME }}" ./signed/GHelper.exe ./signed/GHelper.zip --clobber
     - name: Generate SLSA build provenance attestation
       uses: actions/attest-build-provenance@v2
       with:

@@ -26,9 +26,19 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Normalize version from tag
+        shell: pwsh
+        run: |
+          $appVersion = $env:TAG_NAME -replace '^v', ''
+          if ([string]::IsNullOrWhiteSpace($appVersion)) {
+            throw "Unable to derive app version from tag '$env:TAG_NAME'"
+          }
+
+          "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Publish
         run: |
-          dotnet publish app/GHelper.sln --configuration Release --runtime win-x64 -p:PublishSingleFile=true --no-self-contained
+          dotnet publish app/GHelper.sln --configuration Release --runtime win-x64 -p:PublishSingleFile=true --no-self-contained -p:Version=${{ env.APP_VERSION }} -p:AssemblyVersion=${{ env.APP_VERSION }} -p:FileVersion=${{ env.APP_VERSION }} -p:InformationalVersion=${{ env.APP_VERSION }} -p:SourceRevisionId=
 
       - name: Create ZIP from unsigned EXE
         shell: pwsh
