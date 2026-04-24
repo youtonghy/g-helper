@@ -545,8 +545,8 @@ namespace GHelper
             pictureScan.Visible = true;
             panelACPI.Visible = true;
 
-            textACPICommand.Text = "120098";
-            textACPIParam.Text = "25";
+            textACPICommand.Text = "110034";
+            textACPIParam.Text = "0x0303";
 
             buttonACPISend.Click += ButtonACPISend_Click;
             pictureScan.Click += PictureScan_Click;
@@ -584,7 +584,7 @@ namespace GHelper
             if (AppConfig.Is8Ecores()) eCoresMax = Math.Max(8, eCoresMax);
 
             eCoresMax = Math.Max(4, eCoresMax);
-            pCoresMax = Math.Max(6, pCoresMax);
+            pCoresMax = Math.Max(4, pCoresMax);
 
             panelCores.Visible = true;
 

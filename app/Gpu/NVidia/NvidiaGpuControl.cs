@@ -5,6 +5,7 @@ using NvAPIWrapper.Native.GPU;
 using NvAPIWrapper.Native.GPU.Structures;
 using NvAPIWrapper.Native.Interfaces.GPU;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using static NvAPIWrapper.Native.GPU.Structures.PerformanceStates20InfoV1;
 
 namespace GHelper.Gpu.NVidia;
@@ -64,11 +65,24 @@ public class NvidiaGpuControl : IGpuControl
     {
     }
 
+    private static readonly HashSet<string> _systemProcessNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "dwm", "csrss", "winlogon", "services", "lsass", "smss", "wininit",
+        "svchost", "fontdrvhost", "igfxem", "igfxhk", "igfxext",
+        "nvcontainer", "nvdisplay.container", "nvsettings", "nvspcaps64",
+        "nvsphelper64", "nvwmi64", "nvcplui", "atieclxx", "atiesrxx",
+        "explorer", "taskhostw", "sihost", "runtimebroker", "shellexperiencehost",
+        "searchhost", "startmenuexperiencehost", "textinputhost",
+        "applicationframehost", "systemsettings", "dllhost", "conhost",
+        "audiodg", "ctfloader", "spoolsv", "wlanext", "msdtc",
+    };
+
     public void KillGPUApps()
     {
-
         if (!IsValid) return;
         PhysicalGPU internalGpu = _internalGpu!;
+
+        int currentPid = Process.GetCurrentProcess().Id;
 
         try
         {
@@ -76,6 +90,10 @@ public class NvidiaGpuControl : IGpuControl
             foreach (Process process in processes)
                 try
                 {
+                    if (process.Id == currentPid) continue;
+                    if (process.SessionId == 0) continue;
+                    if (_systemProcessNames.Contains(process.ProcessName)) continue;
+
                     Logger.WriteLine("Kill:" + process.ProcessName);
                     ProcessHelper.KillByProcess(process);
                 }
@@ -182,10 +200,28 @@ public class NvidiaGpuControl : IGpuControl
 
     }
 
-    public static void RestartNVService()
+    public static bool IsContainerRestartNeeded()
+    {
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            @"NVIDIA Corporation\NVIDIA App\NvContainer\NvContainerLocalSystem.log"
+        );
+
+        using var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        fs.Seek(-Math.Min(8192, fs.Length), SeekOrigin.End);
+        var tail = new StreamReader(fs).ReadToEnd();
+
+        var match = Regex.Match(tail,
+            @"NvcPluginLoadStats for 'NvPluginWatchdog'.*?InitializeProcTime = (\d+) us",
+            RegexOptions.Singleline);
+
+        return match.Success && match.Groups[1].Value == "0";
+    }
+
+    public static void RestartNVService(bool light = false)
     {
         if (!ProcessHelper.IsUserAdministrator()) return;
-        RunPowershellCommand(@"Restart-Service -Name 'NVDisplay.ContainerLocalSystem' -Force");
+        if (!light) RunPowershellCommand(@"Restart-Service -Name 'NVDisplay.ContainerLocalSystem' -Force");
         RunPowershellCommand(@"Restart-Service -Name 'NvContainerLocalSystem' -Force");
     }
 

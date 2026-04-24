@@ -66,6 +66,8 @@ public class AsusACPI
     public const uint BatteryDischarge = 0x0012005A;
 
     public const uint StatusMode = 0x00090031;
+    public const uint PowerSavingMode = 0x00090032;
+
     public const uint PerformanceMode = 0x00120075; // Performance modes
     public const uint VivoBookMode = 0x00110019; // Vivobook performance modes
 
@@ -95,6 +97,10 @@ public class AsusACPI
     public const uint DevsCPUFanCurve = 0x00110024;
     public const uint DevsGPUFanCurve = 0x00110025;
     public const uint DevsMidFanCurve = 0x00110032;
+
+    public const uint FanHysteresisCPU = 0x00110034;
+    public const uint FanHysteresisGPU = 0x00110035;
+    public const uint FanHysteresisMid = 0x00110036; // Mid fan hysteresis candidate
 
     public const int Temp_CPU = 0x00120094;
     public const int Temp_GPU = 0x00120097;
@@ -341,7 +347,7 @@ public class AsusACPI
             MaxTotal = 93;
         }
 
-        if (AppConfig.IsFA401EA())
+        if (AppConfig.IsOnlyAIMAX())
         {
             MaxTotal = 115;
             MaxCPU = 115;
@@ -525,6 +531,10 @@ public class AsusACPI
         return fan;
     }
 
+    public bool IsMidFanSupported()
+    {
+        return DeviceGet(Mid_Fan) >= 0;
+    }
 
     public int SetFanRange(AsusFan device, byte[] curve)
     {
@@ -623,6 +633,35 @@ public class AsusACPI
     public static bool IsEmptyCurve(byte[] curve)
     {
         return curve.All(singleByte => singleByte == 0);
+    }
+
+    public (int up, int down) GetFanHysteresis()
+    {
+        int value = DeviceGet(FanHysteresisCPU);
+        if (value < 0)
+        {
+            //Logger.WriteLine($"FanHysteresis Read: not supported ({value})");
+            return (-1, -1);
+        }
+        int up = value & 0xFF;
+        int down = (value >> 8) & 0xFF;
+        Logger.WriteLine($"FanHysteresis Read: up={up} down={down} (raw=0x{value:X4})");
+        return (up, down);
+    }
+
+    public int SetFanHysteresis(int up, int down)
+    {
+        int value = (down << 8) | up;
+        Logger.WriteLine($"FanHysteresis Write: up={up} down={down} (payload=0x{value:X4})");
+        var cpuResult = DeviceSet(FanHysteresisCPU, value, "FanHysteresis CPU");
+        var gpuResult = DeviceSet(FanHysteresisGPU, value, "FanHysteresis GPU");
+        
+        if (DeviceGet(FanHysteresisMid) >= 0)
+        {
+            var midResult = DeviceSet(FanHysteresisMid, value, "FanHysteresis Mid");
+        }
+
+        return cpuResult;
     }
 
     public static byte[] FixFanCurve(byte[] curve)

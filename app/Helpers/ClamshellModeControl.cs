@@ -1,4 +1,4 @@
-﻿using GHelper.Display;
+using GHelper.Display;
 using GHelper.Mode;
 using Microsoft.Win32;
 
@@ -24,35 +24,6 @@ namespace GHelper.Helpers
             _displaySettingsChangedTimer.Elapsed += DisplaySettingsChangedTimer_Elapsed;
         }
 
-        public bool IsExternalDisplayConnected()
-        {
-            try
-            {
-                var devicesList = ScreenInterrogatory.GetAllDevices();
-                var devices = devicesList.ToArray();
-
-                string internalName = AppConfig.GetString("internal_display");
-
-                foreach (var device in devices)
-                {
-                    if (device.outputTechnology != ScreenInterrogatory.DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL &&
-                        device.outputTechnology != ScreenInterrogatory.DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED
-                        && device.monitorFriendlyDeviceName != internalName)
-                    {
-                        Logger.WriteLine("Found external screen: " + device.monitorFriendlyDeviceName + ":" + device.outputTechnology.ToString());
-
-                        //Already found one, we do not have to check whether there are more
-                        return true;
-                    }
-
-                }
-            } catch (Exception ex)
-            {
-                Logger.WriteLine(ex.ToString());
-            }
-
-            return false;
-        }
 
         public bool IsClamshellEnabled()
         {
@@ -66,7 +37,7 @@ namespace GHelper.Helpers
 
         public bool IsClamshellReady()
         {
-            return IsExternalDisplayConnected() && (IsChargerConnected() || AppConfig.Is("clamshell_battery"));
+            return ScreenNative.IsExternalDisplayConnected(true) && (IsChargerConnected() || AppConfig.Is("clamshell_battery"));
         }
 
         public void ToggleLidAction()
@@ -144,7 +115,9 @@ namespace GHelper.Helpers
             _lastExternalDisplayConnected = externalDisplayConnected;
             Program.MarkDisplayTopologyChange(clamshellToggled ? "clamshell-toggle" : reason);
 
-            if (Program.settingsForm.Visible)
+            if (AppConfig.Is("screen_force"))
+                ScreenControl.AutoScreen();
+            else if (Program.settingsForm.Visible)
                 ScreenControl.InitScreen();
 
             if (AppConfig.IsForceMiniled())
@@ -153,7 +126,7 @@ namespace GHelper.Helpers
 
         private bool DetectExternalDisplayConnected()
         {
-            return IsExternalDisplayConnected();
+            return ScreenNative.IsExternalDisplayConnected();
         }
 
         private string GetDisplayChangeReason(bool externalDisplayConnected)

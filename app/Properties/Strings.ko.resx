@@ -803,6 +803,9 @@
   <data name="Donate" xml:space="preserve">
     <value>후원</value>
   </data>
+  <data name="ThankYou" xml:space="preserve">
+    <value>감사합니다</value>
+  </data>
   <data name="Legend" xml:space="preserve">
     <value>범례</value>
   </data>

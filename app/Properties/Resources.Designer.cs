@@ -403,6 +403,16 @@ namespace GHelper.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap icons8_heart_32 {
+            get {
+                object obj = ResourceManager.GetObject("icons8-heart-32", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap icons8_heartbeat_32 {
             get {
                 object obj = ResourceManager.GetObject("icons8-heartbeat-32", resourceCulture);
@@ -449,7 +459,17 @@ namespace GHelper.Properties {
                 return ((System.Drawing.Bitmap)(obj));
             }
         }
-        
+
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap icons8_show_right_side_panel_48 {
+            get {
+                object obj = ResourceManager.GetObject("icons8-show-right-side-panel-48", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>

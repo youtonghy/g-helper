@@ -22,6 +22,7 @@ namespace GHelper
     {
         ContextMenuStrip contextMenuStrip = new CustomContextMenu();
         ToolStripMenuItem menuEco, menuStandard, menuUltimate, menuOptimized;
+        DonateControl donateControl;
 
         public GPUModeControl gpuControl;
         public AllyControl allyControl;
@@ -314,21 +315,14 @@ namespace GHelper
             labelVisual.Click += LabelVisual_Click;
             labelCharge.Click += LabelCharge_Click;
 
-            buttonDonate.Click += ButtonDonate_Click;
-
             tablePerf.AllowDrop = true;
             tablePerf.DragEnter += TablePerf_DragEnter;
             tablePerf.DragOver += TablePerf_DragOver;
             tablePerf.DragLeave += TablePerf_DragLeave;
             tablePerf.DragDrop += TablePerf_DragDrop;
 
-            int click = AppConfig.Get("donate_click");
-            int startCount = AppConfig.Get("start_count");
-            if (startCount >= ((click < 10) ? 10 : click + 50))
-            {
-                buttonDonate.BorderColor = colorTurbo;
-                buttonDonate.Badge = Math.Clamp((startCount - click) / 50, 1, 9);
-            }
+            donateControl = new DonateControl(this, buttonDonate);
+            donateControl.Init();
 
             labelBacklight.ForeColor = colorStandard;
             labelBacklight.Click += LabelBacklight_Click;
@@ -833,13 +827,6 @@ namespace GHelper
             activateCheck = true;
         }
 
-        private void ButtonDonate_Click(object? sender, EventArgs e)
-        {
-            AppConfig.Set("donate_click", AppConfig.Get("start_count"));
-            buttonDonate.Badge = 0;
-            Process.Start(new ProcessStartInfo("https://g-helper.com/support") { UseShellExecute = true });
-        }
-
         private void LabelBacklight_Click(object? sender, EventArgs e)
         {
             if (AppConfig.IsDynamicLighting() && DynamicLightingHelper.IsEnabled()) DynamicLightingHelper.OpenSettings();
@@ -1328,7 +1315,7 @@ namespace GHelper
             contextMenuStrip.ShowCheckMargin = true;
             contextMenuStrip.ImageScalingSize = new Size(16, 16);
             contextMenuStrip.ShowImageMargin = false;
-            Padding padding = new Padding(15, 5, 5, 5);
+            Padding padding = new Padding(5, 5, 5, 5);
 
             var title = new ToolStripMenuItem(Properties.Strings.PerformanceMode);
             title.Margin = padding;
@@ -1384,7 +1371,7 @@ namespace GHelper
             contextMenuStrip.Items.Add(quit);
 
             //contextMenuStrip.ShowCheckMargin = true;
-            contextMenuStrip.RenderMode = ToolStripRenderMode.System;
+            contextMenuStrip.Renderer = new CustomMenuRenderer();
 
             InitContextMenuTheme();
 
@@ -1400,6 +1387,8 @@ namespace GHelper
                 contextMenuStrip.BackColor = this.BackColor;
                 contextMenuStrip.ForeColor = this.ForeColor;
             }
+
+            donateControl?.ApplyTheme();
         }
 
         private void ButtonXGM_Click(object? sender, EventArgs e)
@@ -1510,7 +1499,7 @@ namespace GHelper
 
         private void ButtonScreenAuto_Click(object? sender, EventArgs e)
         {
-            AppConfig.Set("screen_auto", 1);
+            ScreenControl.SetAutoRefresh(1);
             ScreenControl.AutoScreen();
         }
 
@@ -1671,11 +1660,11 @@ namespace GHelper
             FansToggle();
         }
 
-        private void SetColorPicker(string colorField = "aura_color")
+        private void SetColorPicker(string colorField = "aura_color", PictureBox? preview = null)
         {
             ColorDialog colorDlg = new ColorDialog();
             colorDlg.AllowFullOpen = true;
-            colorDlg.Color = pictureColor.BackColor;
+            colorDlg.Color = (preview ?? pictureColor).BackColor;
 
             try
             {
@@ -1694,6 +1683,44 @@ namespace GHelper
         private void ButtonKeyboardColor_Click(object? sender, EventArgs e)
         {
             SetColorPicker("aura_color");
+        }
+
+        private void ButtonRearColor_Click(object? sender, EventArgs e)
+        {
+            SetColorPicker("rear_color", pictureRearColor);
+        }
+
+        private void PictureRearColor_Click(object? sender, EventArgs e)
+        {
+            SetColorPicker("rear_color", pictureRearColor);
+        }
+
+        private void ComboRearLight_SelectedValueChanged(object? sender, EventArgs e)
+        {
+            AppConfig.Set("rear_mode", (int)comboRearLight.SelectedValue);
+            SetAura();
+        }
+
+        public void InitRearLight()
+        {
+            if (!AppConfig.HasRearLight())
+                return;
+
+            Aura.RearMode = (AuraMode)AppConfig.Get("rear_mode");
+            Aura.SetRearColor(AppConfig.Get("rear_color"));
+
+            comboRearLight.DropDownStyle = ComboBoxStyle.DropDownList;
+            comboRearLight.DataSource = new BindingSource(Aura.GetRearModes(), null);
+            comboRearLight.DisplayMember = "Value";
+            comboRearLight.ValueMember = "Key";
+            comboRearLight.SelectedValue = Aura.RearMode;
+            comboRearLight.SelectedValueChanged += ComboRearLight_SelectedValueChanged;
+
+            buttonRearColor.Click += ButtonRearColor_Click;
+            pictureRearColor.Click += PictureRearColor_Click;
+
+            pictureRearColor.BackColor = Aura.RearColor;
+            panelRearLight.Visible = true;
         }
 
         public void InitAura()
@@ -1723,6 +1750,7 @@ namespace GHelper
 
             VisualiseAura();
 
+            InitRearLight();
         }
 
         public void SetAura()
@@ -1739,6 +1767,8 @@ namespace GHelper
             pictureColor.BackColor = Aura.Color1;
             pictureColor2.BackColor = Aura.Color2;
             pictureColor2.Visible = Aura.HasSecondColor();
+
+            if (panelRearLight.Visible) pictureRearColor.BackColor = Aura.RearColor;
 
             bool dynamic = AppConfig.IsDynamicLighting() && DynamicLightingHelper.IsEnabled() && !AppConfig.IsDynamicLightingOnly();
 
@@ -1843,13 +1873,13 @@ namespace GHelper
 
         private void Button120Hz_Click(object? sender, EventArgs e)
         {
-            AppConfig.Set("screen_auto", 0);
+            ScreenControl.SetAutoRefresh(0);
             ScreenControl.SetScreen(ScreenControl.MAX_REFRESH, 1);
         }
 
         private void Button60Hz_Click(object? sender, EventArgs e)
         {
-            AppConfig.Set("screen_auto", 0);
+            ScreenControl.SetAutoRefresh(0);
             ScreenControl.SetScreen(ScreenControl.MIN_RATE, 0);
         }
 
@@ -2083,7 +2113,7 @@ namespace GHelper
             string battery = "";
             string charge = "";
 
-            HardwareControl.ReadSensors();
+            await Task.Run(() => HardwareControl.ReadSensors());
             Task.Run((Action)PeripheralsProvider.RefreshBatteryForAllDevices);
 
             if (HardwareControl.cpuTemp > 0)
@@ -2135,7 +2165,7 @@ namespace GHelper
 
         public void LabelFansResult(string text)
         {
-            if (fansForm != null && fansForm.Text != "")
+            if (fansForm != null && !fansForm.IsDisposed && fansForm.Text != "")
                 fansForm.LabelFansResult(text);
         }
 
@@ -2377,18 +2407,16 @@ namespace GHelper
             int GPUMode = AppConfig.Get("gpu_mode");
             bool isDark = CheckSystemDarkModeStatus();
 
-            switch (GPUMode)
+            Icon newIcon = GPUMode switch
             {
-                case AsusACPI.GPUModeEco:
-                    Program.trayIcon.Icon = AppConfig.IsBWIcon() ? (!isDark ? Properties.Resources.dark_eco : Properties.Resources.light_eco) : Properties.Resources.eco;
-                    break;
-                case AsusACPI.GPUModeUltimate:
-                    Program.trayIcon.Icon = AppConfig.IsBWIcon() ? (!isDark ? Properties.Resources.dark_standard : Properties.Resources.light_standard) : Properties.Resources.ultimate;
-                    break;
-                default:
-                    Program.trayIcon.Icon = AppConfig.IsBWIcon() ? (!isDark ? Properties.Resources.dark_standard : Properties.Resources.light_standard) : Properties.Resources.standard;
-                    break;
-            }
+                AsusACPI.GPUModeEco => AppConfig.IsBWIcon() ? (!isDark ? Properties.Resources.dark_eco : Properties.Resources.light_eco) : Properties.Resources.eco,
+                AsusACPI.GPUModeUltimate => AppConfig.IsBWIcon() ? (!isDark ? Properties.Resources.dark_standard : Properties.Resources.light_standard) : Properties.Resources.ultimate,
+                _ => AppConfig.IsBWIcon() ? (!isDark ? Properties.Resources.dark_standard : Properties.Resources.light_standard) : Properties.Resources.standard,
+            };
+
+            Icon? oldIcon = Program.trayIcon.Icon;
+            Program.trayIcon.Icon = newIcon;
+            oldIcon?.Dispose();
         }
 
         private void ButtonSilent_Click(object? sender, EventArgs e)

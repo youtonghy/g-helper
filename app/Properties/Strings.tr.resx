@@ -803,6 +803,9 @@ Yine de devam etmek istiyor musunuz?</value>
   <data name="Donate" xml:space="preserve">
     <value>Bağış</value>
   </data>
+  <data name="ThankYou" xml:space="preserve">
+    <value>Teşekkürler</value>
+  </data>
   <data name="Legend" xml:space="preserve">
     <value>Gösterge</value>
   </data>
